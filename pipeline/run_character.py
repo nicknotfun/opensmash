@@ -203,6 +203,28 @@ def sh(cmd, timeout=900):
     return r.stdout
 
 
+def generate_emblem_image(prompt, output):
+    """Use a neutral local glyph if the provider blocks this optional artwork."""
+    try:
+        bill("emblem", gen_cost(sh(
+            ["python3", pipeline_script("gen.py"), "image",
+             "--ref", os.path.join(UI_REFS, "emblem_ref.png"),
+             prompt, output], timeout=600)))
+    except RuntimeError as error:
+        if "moderation_blocked" not in str(error):
+            raise
+        # A decorative emblem must not discard a completed fighter. This
+        # geometric ring goes through the normal stencil/packing path and
+        # is saved under the usual filename so resumed jobs reuse it.
+        from PIL import Image, ImageDraw
+        log("emblem: provider blocked artwork; using a generic ring emblem")
+        art = Image.new("RGB", (256, 256), "white")
+        draw = ImageDraw.Draw(art)
+        draw.ellipse((24, 24, 231, 231), fill="black")
+        draw.ellipse((76, 76, 179, 179), fill="white")
+        art.save(output)
+
+
 def tripo_json(out):
     """tripo.py prints one JSON object (possibly {'code':0,'data':...}).
     Some Tripo status payloads embed raw control characters — fall back to
@@ -584,23 +606,7 @@ def main():
         # The engine draws the emblem as a flat one-color stencil, so gate on
         # the stencil, not on the art: a gorgeous solid object is still a blob.
         for _ in range(2):
-            try:
-                bill("emblem", gen_cost(sh(
-                    ["python3", pipeline_script("gen.py"), "image",
-                     "--ref", os.path.join(UI_REFS, "emblem_ref.png"),
-                     prompt, F("emblem_raw.png")], timeout=600)))
-            except RuntimeError as e:
-                # Some names trip input moderation ("public-figure") even
-                # here with no likeness in play. The object description
-                # carries the meaning, so retry once without the name.
-                if "moderation_blocked" not in str(e) or '"input"' not in str(e) or not obj:
-                    raise
-                log("emblem: input moderation on the name — retrying without it")
-                prompt = prompt.replace(f"for the character {cdef['display']}", "for a fighting-game character")
-                bill("emblem", gen_cost(sh(
-                    ["python3", pipeline_script("gen.py"), "image",
-                     "--ref", os.path.join(UI_REFS, "emblem_ref.png"),
-                     prompt, F("emblem_raw.png")], timeout=600)))
+            generate_emblem_image(prompt, F("emblem_raw.png"))
             st = json.loads(sh(["python3", pipeline_script("emblem_stencil.py"), F("emblem_raw.png")],
                                timeout=120))
             log(f"emblem: stencil cut {st['cut_frac']:.0%} in {st['cuts']} holes")
