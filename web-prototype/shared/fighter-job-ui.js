@@ -12,12 +12,23 @@ function fighterName(job) {
   return String(job?.character?.name || job?.name || "your fighter").trim();
 }
 
+export function blockedArtworkDetails(job, stage = job?.stage) {
+  const stages = { tpose: "Model sheet", portrait: "Portrait", stock: "Stock icon", emblem: "Emblem" };
+  const progressStage = { 18: "tpose", 75: "portrait", 81: "stock", 86: "emblem" }[job?.progress];
+  const subject = stages[stage] || stages[progressStage] || "Artwork";
+  return {
+    stageLabel: `${subject} blocked`,
+    error: `The image provider blocked the ${subject.toLowerCase()} but didn’t specify why.`,
+    retryLabel: "Retry generation",
+  };
+}
+
 export function formatFighterJobCellError(job) {
   const error = jobError(job);
   if (PROVIDER_ACCESS_ERROR.test(error)) return "Provider unavailable";
   if (COPYRIGHT_ERROR.test(error)) return "Copyright blocked";
   if (REFERENCE_ERROR.test(error) && SAFETY_ERROR.test(error)) return "Photo rejected";
-  if (SAFETY_ERROR.test(error)) return "Safety check failed";
+  if (SAFETY_ERROR.test(error)) return blockedArtworkDetails(job).stageLabel;
   return "Generation failed";
 }
 
@@ -35,7 +46,7 @@ export function formatFighterJobError(job) {
     return `We couldn’t use the reference photo for ${name} because the image provider rejected it. Try again with a clear, standard photo that you have permission to use.`;
   }
   if (SAFETY_ERROR.test(error)) {
-    return `We couldn’t create ${name} because the image provider’s safety checks didn’t approve the artwork. Try a different photo or adjust the fighter details.`;
+    return `We couldn’t create ${name}. ${blockedArtworkDetails(job).error} Try a different photo or adjust the fighter details.`;
   }
   if (TEMPORARY_ERROR.test(error)) {
     return `Generation for ${name} ran into a temporary provider issue. Please try again in a moment.`;

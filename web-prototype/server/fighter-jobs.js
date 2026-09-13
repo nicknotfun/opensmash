@@ -1,3 +1,4 @@
+import { blockedArtworkDetails } from "../shared/fighter-job-ui.js";
 import { prepareSourceExport, sourceManifest, SOURCE_FILES } from "./source-export.js";
 import { availableFighterTargets } from "../shared/fighter-targets.js";
 import Busboy from "busboy";
@@ -405,15 +406,10 @@ export function createFighterJobs({
           job.status === "failed" &&
           (job.logTail || []).some((line) => line.includes("moderation_blocked"))
         ) {
-          if ((job.progress || 0) >= 75) {
-            job.stageLabel = "Generated portrait was blocked";
-            job.error = "The image provider blocked its generated portrait. The model and moveset variants are saved; reroll only the portrait to continue.";
-            job.retry.label = "Reroll portrait";
-          } else {
-            job.stageLabel = "Generated art was blocked";
-            job.error = "The image provider blocked generated art. Retry to reroll the missing stage.";
-            job.retry.label = "Reroll art";
-          }
+          const details = blockedArtworkDetails(job);
+          job.stageLabel = details.stageLabel;
+          job.error = details.error;
+          job.retry.label = details.retryLabel;
           await saveJob(job);
         }
         jobs.set(job.id, job);
@@ -627,15 +623,10 @@ export function createFighterJobs({
         job.error = "The image provider rejected the reference photo. Resume to retry with a normalized copy.";
         job.retry.label = "Resume generation";
       } else if (joinedLog.includes("moderation_blocked")) {
-        if (failedStage === "portrait") {
-          job.stageLabel = "Generated portrait was blocked";
-          job.error = "The image provider blocked its generated portrait. The model and moveset variants are saved; reroll only the portrait to continue.";
-          job.retry.label = "Reroll portrait";
-        } else {
-          job.stageLabel = "Generated art was blocked";
-          job.error = "The image provider blocked generated art. Retry to reroll the missing stage.";
-          job.retry.label = "Reroll art";
-        }
+        const details = blockedArtworkDetails(job, failedStage);
+        job.stageLabel = details.stageLabel;
+        job.error = details.error;
+        job.retry.label = details.retryLabel;
       } else {
         const lastUsefulLine = [...(job.logTail || [])].reverse().find((line) => /failed|error|runtime/i.test(line));
         job.error = lastUsefulLine || `Pipeline exited ${signal ? `after ${signal}` : `with code ${code}`}.`;

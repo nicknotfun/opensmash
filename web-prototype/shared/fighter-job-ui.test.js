@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  blockedArtworkDetails,
   formatFighterJobCellError,
   formatFighterJobError,
   reconcileVisibleFighterJobs,
@@ -13,11 +14,11 @@ test("generation errors are converted to friendly toast and compact cell copy", 
   assert.equal(formatFighterJobCellError(copyrightJob), "Copyright blocked");
 
   const safetyJob = { name: "Safety Test", error: "content policy safety block" };
-  assert.match(formatFighterJobError(safetyJob), /safety checks/);
-  assert.equal(formatFighterJobCellError(safetyJob), "Safety check failed");
+  assert.match(formatFighterJobError(safetyJob), /didn’t specify why/);
+  assert.equal(formatFighterJobCellError(safetyJob), "Artwork blocked");
 
   const codedSafetyJob = { name: "Coded Test", error: "moderation_blocked: content_filter" };
-  assert.match(formatFighterJobError(codedSafetyJob), /safety checks/);
+  assert.match(formatFighterJobError(codedSafetyJob), /didn’t specify why/);
 
   const rawJob = { name: "Raw Test", error: "Traceback: pipeline exited with code 17" };
   assert.equal(
@@ -61,4 +62,15 @@ test("Tripo edge rejection is a provider failure, not a photo safety failure", (
   assert.equal(formatFighterJobCellError(job), "Provider unavailable");
   assert.match(formatFighterJobError(job), /3D provider is blocking our connection/);
   assert.doesNotMatch(formatFighterJobError(job), /different photo|safety checks/);
+});
+
+
+test("unknown moderation names the failed artwork without asserting copyright", () => {
+  for (const [progress, subject] of [[18, "Model sheet"], [75, "Portrait"], [81, "Stock icon"], [86, "Emblem"]]) {
+    const job = { name: "Bugs", stage: "failed", progress, error: "moderation_blocked: other" };
+    assert.equal(blockedArtworkDetails(job).stageLabel, `${subject} blocked`);
+    assert.equal(formatFighterJobCellError(job), `${subject} blocked`);
+    assert.match(formatFighterJobError(job), /didn’t specify why/);
+    assert.doesNotMatch(formatFighterJobError(job), /copyright|protected content/i);
+  }
 });
