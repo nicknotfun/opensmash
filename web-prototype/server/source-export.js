@@ -13,7 +13,11 @@ export async function prepareSourceExport(job,ownerId,store) {
     if(raw.length>64*1024*1024) throw Object.assign(new Error('Character asset is too large to export.'),{status:413});
     files[name]={key:entry.key,bytes:raw.length,sha256:createHash('sha256').update(raw).digest('hex')};
   }
-  const unchanged=JSON.stringify(files)===JSON.stringify(job.sourceExport?.files);
+  // Storage paths and object property order are not part of the public content.
+  const unchanged=/^[a-f0-9]{48}$/.test(job.sourceExport?.capability || '') && SOURCE_FILES.every(name=>{
+    const previous=job.sourceExport.files?.[name];
+    return previous?.bytes===files[name].bytes && previous?.sha256===files[name].sha256;
+  });
   return {capability:unchanged?job.sourceExport.capability:randomBytes(24).toString('hex'),files};
 }
 export function sourceManifest(job) {

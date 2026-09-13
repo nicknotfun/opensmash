@@ -298,6 +298,7 @@ export function createFighterJobs({
   const normalizeImageScript = path.join(appRoot, "server", "normalize-image.py");
   const jobs = new Map();
   const queue = [];
+  const sourceExports = new Map();
   const events = new EventEmitter();
   events.setMaxListeners(0);
   const localExecution = dispatcher.driver === "local";
@@ -1293,10 +1294,26 @@ export function createFighterJobs({
       return Boolean(job && job.visibility !== "private");
     },
     async exportSource(id, ownerId) {
-      const job=jobs.get(id);
-      const result=await prepareSourceExport(job,ownerId,objectStore);
-      job.sourceExport=result;await saveJob(job);
-      return {url:`/engine/character-source/${result.capability}/manifest.json`};
+      // Serialize this replica, then use revision checks across Firestore replicas.
+      const previous=sourceExports.get(id) || Promise.resolve();
+      const pending=previous.catch(()=>{}).then(async()=>{
+        for(let attempt=0;attempt<5;attempt++) {
+          const job=await jobDatabase.get(id);
+          const result=await prepareSourceExport(job,ownerId,objectStore);
+          const revision=job.revision || 0;
+          const updated={...job,sourceExport:result,revision:revision+1,updatedAt:new Date().toISOString()};
+          try { await jobDatabase.save(updated,{expectedRevision:revision}); }
+          catch(error) { if(error.code==='STALE_JOB')continue; throw error; }
+          if((jobs.get(id)?.revision || 0)<=updated.revision) {
+            jobs.set(id,updated);events.emit(id,jobSnapshot(updated));
+          }
+          return {url:`/engine/character-source/${result.capability}/manifest.json`};
+        }
+        throw Object.assign(new Error('This fighter changed while exporting. Please try again.'),{status:409});
+      });
+      sourceExports.set(id,pending);
+      try { return await pending; }
+      finally { if(sourceExports.get(id)===pending)sourceExports.delete(id); }
     },
     sourceExport(capability, name) {
       const job=[...jobs.values()].find(j=>j.status==='complete' && j.sourceExport?.capability===capability);

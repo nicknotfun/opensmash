@@ -38,7 +38,7 @@ function uploadRequest({ name = "Test Fighter", turnstileToken = null, headers =
   return request;
 }
 
-async function harness({ storedJobs = [], moderator = async () => ({ status: "approved" }), driver = "local", dispatch = async () => ({ executionName: "exec" }), turnstile = null, reservedSlugs = undefined, watch = () => null, databaseOverrides = {} } = {}) {
+async function harness({ storedJobs = [], moderator = async () => ({ status: "approved" }), driver = "local", dispatch = async () => ({ executionName: "exec" }), turnstile = null, reservedSlugs = undefined, watch = () => null, databaseOverrides = {}, objectStoreOverrides = {} } = {}) {
   const appRoot = await mkdtemp(path.join(os.tmpdir(), "opensmash-jobs-test-"));
   await mkdir(path.join(appRoot, "data", "fighter-jobs"), { recursive: true });
   const saved = [];
@@ -53,6 +53,7 @@ async function harness({ storedJobs = [], moderator = async () => ({ status: "ap
     putFile: async (key) => ({ key, url: null }),
     putJson: async (key) => ({ key, url: null }),
     getFile: async () => {},
+    ...objectStoreOverrides,
   };
   const jobs = createFighterJobs({
     appRoot,
@@ -479,4 +480,31 @@ test("stale reconciliation refreshes the cache without overwriting a completed f
     assert.equal(jobs.get(stale.id).status, "complete");
     assert.equal(stale.status, "queued", "do not mutate the cached job before the transaction succeeds");
   } finally { await cleanup(); }
+});
+
+
+test("simultaneous source exports across replicas preserve every returned URL and fresh settings", async () => {
+  const names=['rigged.glb','portrait_raw.png','stock_raw.png','emblem_raw.png','announcer.wav'];
+  let stored=storedJob({status:'complete',revision:1,checkpoint:{files:names.map(name=>({scope:'output',name,key:name}))}});
+  const stale=structuredClone(stored);
+  stored.visibility='private';stored.revision=2;
+  let conflicts=0;
+  const options={storedJobs:[stale],objectStoreOverrides:{read:async key=>Buffer.from(key)},databaseOverrides:{
+    get:async()=>structuredClone(stored),
+    save:async(job,{expectedRevision})=>{
+      if(expectedRevision!==stored.revision){conflicts++;throw Object.assign(new Error('stale'),{code:'STALE_JOB'});}
+      stored=structuredClone(job);
+    },
+  }};
+  const a=await harness(options),b=await harness(options);
+  try {
+    await Promise.all([a.jobs.init(),b.jobs.init()]);
+    const results=await Promise.all([a.jobs.exportSource(stored.id,'owner-1'),b.jobs.exportSource(stored.id,'owner-1'),a.jobs.exportSource(stored.id,'owner-1')]);
+    assert.ok(conflicts>0);
+    assert.equal(new Set(results.map(r=>r.url)).size,1);
+    assert.equal(stored.visibility,'private');
+    const capability=results[0].url.split('/')[3];
+    assert.equal(a.jobs.sourceExport(capability,'manifest.json').manifest.files['rigged.glb'].bytes,10);
+    await assert.rejects(a.jobs.exportSource(stored.id,'other'),/not found/);
+  } finally {await a.cleanup();await b.cleanup();}
 });

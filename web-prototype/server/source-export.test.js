@@ -15,3 +15,16 @@ test('exports only generated assets, stable digest and no checkpoint paths',asyn
  assert.equal(m.format,'opensmash-source-v1');assert.ok(!JSON.stringify(m).includes('private/'));assert.ok(!JSON.stringify(m).includes('owner'));
  for(const f of Object.values(m.files)){assert.match(f.sha256,/^[a-f0-9]{64}$/);assert.ok(f.bytes>0);}
 });
+
+test('same bytes keep the URL through property reordering and storage relocation',async()=>{
+ const j=job();const contentStore={read:async key=>Buffer.from(key.split('/').pop())};
+ j.sourceExport=await prepareSourceExport(j,'owner',contentStore);
+ const original=j.sourceExport.capability;
+ j.sourceExport.files=Object.fromEntries(Object.entries(j.sourceExport.files).reverse().map(([name,f])=>[name,{sha256:f.sha256,bytes:f.bytes,key:f.key}]));
+ for(const f of j.checkpoint.files)f.key='relocated/'+f.name;
+ const again=await prepareSourceExport(j,'owner',contentStore);
+ assert.equal(again.capability,original);
+ assert.equal(again.files['rigged.glb'].key,'relocated/rigged.glb');
+ const changed=await prepareSourceExport(j,'owner',{read:async key=>Buffer.from(key+'changed')});
+ assert.notEqual(changed.capability,original);
+});
