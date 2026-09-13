@@ -21,6 +21,10 @@ def normalize(source, destination):
         icc_profile = uploaded.info.get("icc_profile")
 
     image.thumbnail((MAX_DIMENSION, MAX_DIMENSION), Image.Resampling.LANCZOS)
+    # Indexed PNGs store transparency in their palette, without an A band.
+    # Expand it before RGB conversion so hidden palette colors stay hidden.
+    if "transparency" in image.info:
+        image = image.convert("RGBA")
     alpha = image.getchannel("A") if "A" in image.getbands() else None
     image = image.convert("RGB")
 
