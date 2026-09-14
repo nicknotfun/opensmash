@@ -17,3 +17,14 @@ test('engine settings and moveset overrides survive shared device translation',(
  assert.equal(settings.ports[0].target,'marth');assert.equal(settings.stage,defaults.stage);
  assert.notEqual(settings.ports,defaults.ports);
 });
+
+test('manual opponents follow human picks even when CPUs occupy earlier ports',()=>{
+ const settings=applyLauncherSelection(structuredClone(schema.defaults),{character:roster[0],picks:[roster[1]],selectionMode:'full-roster',portPlan:[{kind:'cpu'},{kind:'keyboard'},{kind:'none'},{kind:'none'}]});
+ assert.equal(settings.ports[1].character,'one');assert.equal(settings.ports[0].character,'two');
+});
+test('full-game and character-select actions retain their meaning in Melee',()=>{
+ for(const [type,mode] of [['start',4],['select',2]]){
+  const settings=applyLauncherSelection(structuredClone(schema.defaults),{type,portPlan:[{kind:'keyboard'},null,null,null]});
+  assert.equal(settings.mode,mode);
+ }
+});

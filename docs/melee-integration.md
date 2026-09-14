@@ -74,7 +74,7 @@ Not yet implemented or validated:
   opt-in shared shell with a bundled frontend, local Melee dispatch, and native
   SSB64 process dispatch. SSB64 opens its own window and currently supports default
   player-one input only. This prototype does not establish native-client parity.
-- Per-device GameCube binding profiles, native/browser device identity mapping,
+- Native/browser device identity mapping,
   automatic in-match hot-plug assignment, and complete touch controls.
 - End-to-end real-disc combat checks and fresh native installers on Windows/macOS.
 - Repointing hosted desktop release triggers from the old repository. Imported
@@ -106,3 +106,35 @@ unverified. See `desktop/README.md` for the experimental development command.
 
 These checks validate the migration and prototype boundaries. They do not replace
 real-disc gameplay testing, packaged-client verification, or the acceptance matrix.
+
+## Parity implementation follow-up
+
+The shared picker now runs before either engine adapter, including human-first
+manual CPU selections. Melee honors the launcher's full-game and character-select
+actions. Its button profiles persist by browser device identity and are resolved
+into per-device native configuration at launch. Browser input bypasses the N64
+remapper and is neutral while a settings dialog is open. This does not yet solve
+matching browser device slots to SDL devices or remapping nonstandard axes.
+
+Melee disc setup now refreshes throughout native installation. Shared gameplay
+settings can replace or forget the disc. Native status polling survives an older
+session and temporary service failure; cancellation aborts outstanding polling.
+SSB64 preparation is fenced against cancelled or superseded launches, and desktop
+quit waits for both engines to stop. Melee uses its own touch controls rather than
+the SSB64 overlay.
+
+The desktop Settings shortcut opens the authoritative settings panel. Native
+pages allow the website's authentication popup without its engine preload; real
+account login remains unverified. Native pages no longer apply the browser WASM
+isolation headers. Blob textures and the YouTube embed referrer now work in the
+bundled site. Manual macOS checks confirmed trailer playback on both routes and
+Melee disc, gameplay, player assignment, and controller profile screens. No real
+disc or physical controller was supplied during these checks; combat and device
+hot-plugging are still acceptance requirements.
+
+Follow-up validation: 282 website tests, 30 engine/desktop JavaScript tests, and
+144 Melee Python tests passed (one disc fixture and 15 Python environment fixtures
+skipped). Both frontend builds and the expanded TypeScript check passed. Manual
+native testing also confirmed the player/CPU picker reaches disc setup after all
+four choices. The temporary selection preference was restored and test clients
+were closed.

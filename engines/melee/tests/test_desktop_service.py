@@ -93,6 +93,19 @@ class DesktopServiceTests(unittest.TestCase):
         self.assertFalse((workspace / "tools/removed.py").exists())
         self.assertEqual((workspace / "tools/current.txt").read_text(), "new")
 
+    def test_each_native_port_uses_its_controller_profile(self):
+        ports = [{"device": d} for d in ["gamepad0", "gamepad1", "cpu", "off"]]
+        controls = {"gamepads": {"gamepad0": {"a": 2, "l": 7}, "gamepad1": {"a": 1}}}
+        with patch.object(self.service, "check_controllers", return_value=["SDL/0/Xbox", "SDL/0/Sony"]):
+            self.service.controllers(ports, controls)
+        import configparser
+        config = configparser.ConfigParser()
+        config.read(self.service.user / "Config/GCPadNew.ini")
+        self.assertEqual(config["GCPad1"]["Buttons/A"], "`Button X`")
+        self.assertEqual(config["GCPad2"]["Buttons/A"], "`Button B`")
+        self.assertEqual(config["GCPad1"]["Triggers/L-Analog"], "`Trigger R`")
+        self.assertEqual(config["GCPad2"]["Triggers/L-Analog"], "`Trigger L`")
+
     def test_launch_requires_verified_disc(self):
         with self.assertRaisesRegex(ValueError, "verify your ISO"):
             self.service.launch(

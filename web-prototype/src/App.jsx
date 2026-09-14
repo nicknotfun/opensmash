@@ -1,3 +1,5 @@
+import {loadSettings as loadMeleeSettings} from '../../engines/melee/web/lib/launch';
+import {selectionPorts as meleeSelectionPorts} from '../../engines/melee/launcher/launch-plan.mjs';
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import flowMusicUrl from "../visual/assets/skyward-save.mp3?url";
 import viewportLogoUrl from "../visual/assets/branding/super-weights-bros-stacked-white.png?url";
@@ -339,7 +341,7 @@ const MeleeSettings = lazy(()=>import('../../engines/melee/launcher/Experience.t
 export default function App() {
   const nativeSsb64=Boolean(window.openSmashDesktop?.engines?.ssb64);
   const isMelee = /^\/melee(?:\/|$)/.test(window.location.pathname);
-  function launchMelee(action){setEngine({experience:'melee',id:crypto.randomUUID(),action:{...action,portPlan:controllerPlan(advancedOptions,gamepads)}});setPendingAction(null);}
+  function launchMelee(action){setEngine({experience:'melee',id:crypto.randomUUID(),action:{...action,selectionMode:advancedOptions.selectionMode,portPlan:controllerPlan(advancedOptions,gamepads)}});setPendingAction(null);}
 
   useEffect(installPerformanceCapture, []);
   const isCreatePage = window.location.pathname.replace(/\/+$/, "") === "/create";
@@ -409,6 +411,7 @@ export default function App() {
   const [advancedOptions, setAdvancedOptions] = useState(loadAdvancedOptions);
   const gamepads = useGamepads();
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  useEffect(() => window.meleeDesktop?.onOpenSettings(() => setAdvancedOpen(true)), []);
   const [aboutOpen, setAboutOpen] = useState(false);
   // Fighter job whose generation details modal is open (null = closed).
   const [detailsJobId, setDetailsJobId] = useState(null);
@@ -1540,7 +1543,7 @@ export default function App() {
       characters,
       fighterJobs,
       showEngineControls: isMelee ? ()=>setAdvancedOpen(true) : undefined,
-      requestEngineLaunch: (isMelee||nativeSsb64) ? (fighter)=>{launchVisualAction({type:fighter.actionType||'character',slug:fighter.slug});return true;} : undefined,
+      handlesGameSetup: isMelee||nativeSsb64,
       announceCharacter(slug) {
         const character = characters.find((candidate) => candidate.slug === slug);
         if (character) announceCharacter(character);
@@ -1550,6 +1553,11 @@ export default function App() {
       completeCreateRom() { setCreateStage("creator"); },
       hasGamepad() { return gamepads.length > 0; },
       selectionSlots() {
+        if(isMelee){
+          const plan=controllerPlan(advancedOptions,gamepads);
+          return meleeSelectionPorts(plan,advancedOptions.selectionMode,loadMeleeSettings().mode).map(port=>
+            !plan[port]||plan[port].kind==='cpu'?`CPU${port+1}`:`${port+1}P`);
+        }
         return characterSelectionSlots(launchOptionsFor({ type: "character" }), gamepads);
       },
       humanPortCount() {

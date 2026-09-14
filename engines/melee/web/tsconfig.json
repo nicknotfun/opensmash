@@ -17,6 +17,12 @@
     "paths": {
       "@/*": [
         "./*"
+      ],
+      "react": [
+        "./node_modules/@types/react"
+      ],
+      "react/*": [
+        "./node_modules/@types/react/*"
       ]
     },
     "allowJs": true,
@@ -27,6 +33,7 @@
     "main.tsx",
     "vite.config.ts",
     "components",
-    "lib"
+    "lib",
+    "../launcher"
   ]
 }

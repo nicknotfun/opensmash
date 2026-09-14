@@ -6,15 +6,38 @@ import {applyLauncherSelection} from './launch-plan.mjs';
 import {schema} from '../web/lib/launch';
 import {loadSettings,type Settings} from '../web/lib/launch';
 import {desktop,preferences} from '../web/lib/desktop';
-import {suspendMelee,selectLocalDisc,subscribeLocalDisc} from '../web/lib/melee-session';
+import {suspendMelee,selectLocalDisc,subscribeLocalDisc,clearLocalDisc} from '../web/lib/melee-session';
+import {pollService} from '../web/lib/service-poll';
 import catalog from '../web/public/catalog.json';
 import type {Fighter} from '../web/lib/fighter';
 import './launcher.css';
 export const roster=catalog as Fighter[];
+export function MeleeDiscSettings(){
+ const [status,setStatus]=useState(''),[error,setError]=useState('');
+ useEffect(()=>desktop()?pollService<{message:string}>('/melee/api/setup',s=>setStatus(s.message),e=>setError(e.message)):subscribeLocalDisc(s=>setStatus(s.message)),[]);
+ async function choose(file?:File){
+  setError('');
+  try{if(desktop())await desktop()!.chooseDisc();else if(file)await selectLocalDisc(file);}catch(e){setError((e as Error).message);}
+ }
+ async function clear(){
+  setError('');
+  try{
+   if(desktop()){
+    const response=await fetch('/melee/api/setup/clear',{method:'POST'});
+    const result=await response.json();if(!response.ok)throw Error(result.error||'Could not forget this disc.');
+    setStatus(result.message);
+   }else clearLocalDisc();
+  }catch(e){setError((e as Error).message);}
+ }
+ return <section><h3>Melee disc</h3><p role="status">{status}</p>{error&&<p role="alert">{error}</p>}
+  {desktop()?<button onClick={()=>void choose()}>Choose another disc</button>:<label>Choose another disc<input type="file" accept=".iso,.gcm" onChange={e=>void choose(e.target.files?.[0])}/></label>}
+  <button onClick={()=>void clear()}>Forget disc and close Melee</button>
+ </section>;
+}
 export function MeleeSettings(){
  const [settings,setSettings]=useState(loadSettings);
  function update(value:Settings){setSettings(value);preferences.setItem('melee-launch-v1',JSON.stringify(value));}
- return <div className="melee-settings"><LaunchSettings section="gameplay" value={settings} onChange={update} roster={roster}/>{settings.ports.map((port,index)=><label key={index}>Player {index+1} moveset<select value={port.target||'auto'} onChange={e=>update({...settings,ports:settings.ports.map((p,i)=>i===index?{...p,target:e.target.value}:p)})}><option value="auto">Character default</option>{schema.targets.map(t=><option key={t.slug} value={t.slug}>{t.label}</option>)}</select></label>)}</div>;
+ return <div className="melee-settings"><MeleeDiscSettings/><LaunchSettings section="gameplay" value={settings} onChange={update} roster={roster}/>{settings.ports.map((port,index)=><label key={index}>Player {index+1} moveset<select value={port.target||'auto'} onChange={e=>update({...settings,ports:settings.ports.map((p,i)=>i===index?{...p,target:e.target.value}:p)})}><option value="auto">Character default</option>{schema.targets.map(t=><option key={t.slug} value={t.slug}>{t.label}</option>)}</select></label>)}</div>;
 }
 export default function MeleeExperience({action,onClose,soundOn=true}:{action:any;onClose:()=>void;soundOn?:boolean}){
  const [ready,setReady]=useState(false),[status,setStatus]=useState('Choose your unmodified Melee USA 1.02 ISO or GCM.'),[error,setError]=useState('');
@@ -22,9 +45,9 @@ export default function MeleeExperience({action,onClose,soundOn=true}:{action:an
  const fighter=action.character ? roster.find(f=>f.slug===action.character.slug) : roster[0];
  useEffect(()=>{
   if(desktop()){
-   const abort=new AbortController();
-   fetch('/melee/api/setup',{signal:abort.signal}).then(r=>r.json()).then(s=>{setReady(s.ready);setStatus(s.message||'Choose your Melee disc.');}).catch(e=>{if(!abort.signal.aborted)setError(e.message);});
-   return()=>abort.abort();
+   return pollService<{ready:boolean;message:string}>('/melee/api/setup',s=>{
+    setReady(s.ready);setStatus(s.message||'Choose your Melee disc.');setError('');
+   },e=>setError(e.message));
   }
   return subscribeLocalDisc(s=>{setReady(s.ready);setStatus(s.message);});
  },[]);
@@ -33,8 +56,8 @@ export default function MeleeExperience({action,onClose,soundOn=true}:{action:an
   setError('');
   try{
    if(desktop()){
-    await desktop()!.chooseDisc();
-    const response=await fetch('/melee/api/setup');const s=await response.json();setReady(s.ready);setStatus(s.message||'Preparing disc…');
+    const result=await desktop()!.chooseDisc();
+    if(result.accepted)setStatus('Preparing disc…');
    }else if(file)await selectLocalDisc(file);
   }catch(e){setError((e as Error).message);}
  }

@@ -34,9 +34,15 @@ supported; custom assignments are rejected rather than silently ignored.
 
 This is not a distributable two-engine client yet. Remaining work includes SSB64
 runtime packaging without game-derived assets, portable dependencies, shared
-native input profiles/hot-plugging, offline roster and asset persistence, OAuth
-popup handling, audio changes during native matches, and full engine/UI parity
+native input profiles/hot-plugging, offline roster and asset persistence, end-to-end OAuth
+verification, audio changes during native matches, and full engine/UI parity
 checks on both Windows and macOS. The shared mode is opt-in and no hosted release
 trigger has been changed.
 
 Run adapter tests with `node --test desktop/*.test.cjs engines/ssb64/desktop/*.test.cjs`.
+
+The shared Settings menu and macOS shortcut now include Melee disc management and
+per-controller button profiles. The native host permits only the website's auth
+handler to open a sandboxed popup without the engine preload. Trailer playback
+was checked on both experience routes. Native device identity mapping, SSB64
+custom bindings, and live engine audio remain separate parity work.

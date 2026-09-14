@@ -257,7 +257,7 @@ class NativeService:
         if isinstance(saved, dict):
             for action in self.BUTTONS:
                 index = saved.get(action)
-                if isinstance(index, int) and 0 <= index < len(self.SDL_BUTTONS):
+                if type(index) is int and 0 <= index < len(self.SDL_BUTTONS):
                     gamepad[action] = index
         return keyboard, gamepad
 
@@ -361,7 +361,15 @@ class NativeService:
             if d.startswith("gamepad"):
                 index = int(d[-1])
                 device = pads[index]
-                bindings = pad_bind
+                bindings = dict(pad_bind)
+                profiles = controls.get("gamepads", {}) if isinstance(controls, dict) else {}
+                profile = profiles.get(d) if isinstance(profiles, dict) else None
+                if isinstance(profile, dict):
+                    _, port_buttons = self.bindings({"gamepad": {**buttons, **profile}})
+                    for action in self.BUTTONS:
+                        bindings[self.BINDING_TARGETS[action]] = quote(self.SDL_BUTTONS[port_buttons[action]])
+                    bindings["Triggers/L-Analog"] = bindings["Triggers/L"]
+                    bindings["Triggers/R-Analog"] = bindings["Triggers/R"]
             else:
                 device = keyboard
                 bindings = keyboard_bind

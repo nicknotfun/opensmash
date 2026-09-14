@@ -283,7 +283,7 @@ export default function RetroHome({
   const [mobileLayout, setMobileLayout] = useState(() => (
     mobileControlsRequested() || window.matchMedia(MOBILE_CONTROLS_MEDIA).matches
   ));
-  const mobileControlsVisible = mobileLayout && Boolean(engine);
+  const mobileControlsVisible = mobileLayout && Boolean(engine) && !engineContent;
   const hasResetRomAction = developmentMode && authorized;
   const keepSingleTouchActionVisible = mobileLayout && !hasResetRomAction;
 

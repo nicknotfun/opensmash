@@ -2,7 +2,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 
 const PAGES=new Set(['/','/melee','/melee/','/create','/create/','/trailer','/trailer/','/og-studio','/og-studio/','/index.html']);
-const CSP="default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://www.gstatic.com https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob: https:; media-src 'self' blob: https:; font-src 'self' data: https:; connect-src 'self' https: wss:; worker-src 'self' blob:; frame-src https:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'";
+const CSP="default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://www.gstatic.com https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob: https:; media-src 'self' blob: https:; font-src 'self' data: https:; connect-src 'self' blob: https: wss:; worker-src 'self' blob:; frame-src https:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'";
 const TYPES={'.html':'text/html; charset=utf-8','.js':'text/javascript','.css':'text/css','.json':'application/json','.png':'image/png','.webp':'image/webp','.svg':'image/svg+xml','.woff2':'font/woff2','.wav':'audio/wav','.mp3':'audio/mpeg','.glb':'model/gltf-binary'};
 
 // The desktop bundles the frontend while retaining the website origin for
@@ -12,7 +12,15 @@ function createSiteHandler({dist,backend,token,site='https://smash.fun',fetchRem
  const siteOrigin=new URL(site).origin,root=path.resolve(dist);
  return async request=>{
   const url=new URL(request.url);
-  if(url.origin!==siteOrigin)return fetchRemote(request);
+  if(url.origin!==siteOrigin){
+   // Electron's protocol forwarding loses the embed initiator. YouTube needs
+   // the website origin as Referer to identify the player (otherwise error 153).
+   if(['https://www.youtube-nocookie.com','https://www.youtube.com'].includes(url.origin)&&url.pathname.startsWith('/embed/')){
+    const headers=new Headers(request.headers);headers.set('Referer',siteOrigin+'/');
+    return fetchRemote(new Request(request,{headers}));
+   }
+   return fetchRemote(request);
+  }
   if(/^\/melee\/(api|engine)\//.test(url.pathname)){
    const headers=new Headers(request.headers);
    headers.delete('cookie');headers.delete('authorization');headers.delete('origin');
@@ -33,7 +41,9 @@ function createSiteHandler({dist,backend,token,site='https://smash.fun',fetchRem
    try{body=await fs.readFile(file);}catch{return new Response('Bundled launcher asset missing. Reinstall the client.',{status:404});}
    const headers={'Content-Type':TYPES[path.extname(file)]||'application/octet-stream','Cache-Control':'no-cache','Cross-Origin-Resource-Policy':'same-origin'};
    if(page)headers['Content-Security-Policy']=CSP;
-   if(url.pathname.startsWith('/melee'))Object.assign(headers,{'Cross-Origin-Opener-Policy':'same-origin','Cross-Origin-Embedder-Policy':'require-corp'});
+   // Native engines do not need browser shared memory. Keep OAuth popups
+   // and the website's trailer available on either experience.
+   if(page)headers['Cross-Origin-Opener-Policy']='same-origin-allow-popups';
    return new Response(request.method==='HEAD'?null:body,{headers});
   }
   // Browser services own their authentication and cookies. Forward the request

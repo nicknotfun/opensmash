@@ -1,4 +1,4 @@
-import {preferences} from '@/lib/desktop';
+import {preferences} from './desktop.ts';
 
 // GameCube controls the game reads, in the order the Controls screen lists them.
 export const actions=[
@@ -22,7 +22,7 @@ export const actions=[
 export type Action=(typeof actions)[number]['id'];
 export type ButtonAction='a'|'b'|'x'|'y'|'z'|'l'|'r'|'start';
 export const buttonActions:ButtonAction[]=['a','b','x','y','z','l','r','start'];
-export type Bindings={keyboard:Record<Action,string>;gamepad:Record<ButtonAction,number>};
+export type Bindings={keyboard:Record<Action,string>;gamepad:Record<ButtonAction,number>;profiles?:Record<string,Record<ButtonAction,number>>};
 
 // Physical DOM key codes: the right-hand cluster stays under the fingers on every layout.
 export const defaultKeyboard:Record<Action,string>={
@@ -52,6 +52,9 @@ export function loadBindings():Bindings {
   const saved=JSON.parse(preferences.getItem(STORAGE)||'{}');
   for(const action of actions){const code=saved?.keyboard?.[action.id];if(typeof code==='string'&&bindableKeys.has(code))b.keyboard[action.id]=code;}
   for(const action of buttonActions){const index=saved?.gamepad?.[action];if(Number.isInteger(index)&&index>=0&&index<maxGamepadButton)b.gamepad[action]=index;}
+  if(saved.profiles&&typeof saved.profiles==='object'&&!Array.isArray(saved.profiles)){
+   b.profiles=Object.fromEntries(Object.entries(saved.profiles).slice(0,64).filter(([id])=>id.length<=1024).map(([id,mapping])=>[id,validGamepad(mapping,b.gamepad)]));
+  }
  }catch{}
  return current=b;
 }
@@ -71,13 +74,33 @@ export function rebindKey(b:Bindings,action:Action,code:string):Bindings {
  keyboard[action]=code;
  return {...b,keyboard};
 }
-export function rebindButton(b:Bindings,action:ButtonAction,index:number):Bindings {
+function validGamepad(value:unknown,fallback=defaultGamepad):Record<ButtonAction,number>{
+ const mapping={...fallback};
+ if(value&&typeof value==='object')for(const action of buttonActions){
+  const index=(value as Record<string,unknown>)[action];
+  if(typeof index==='number'&&Number.isInteger(index)&&index>=0&&index<maxGamepadButton)mapping[action]=index;
+ }
+ return mapping;
+}
+// Identity survives browser index changes. Identical models share a profile.
+export function gamepadBindings(b:Bindings,id?:string):Record<ButtonAction,number>{return id&&Object.hasOwn(b.profiles||{},id)?b.profiles![id]:b.gamepad;}
+export function rebindButton(b:Bindings,action:ButtonAction,index:number,id?:string):Bindings {
  if(!Number.isInteger(index)||index<0||index>=maxGamepadButton)return b;
- const gamepad={...b.gamepad};
- const other=buttonActions.find(id=>gamepad[id]===index&&id!==action);
+ const gamepad={...gamepadBindings(b,id)};
+ const other=buttonActions.find(key=>gamepad[key]===index&&key!==action);
  if(other)gamepad[other]=gamepad[action];
  gamepad[action]=index;
- return {...b,gamepad};
+ return id?{...b,profiles:{...b.profiles,[id]:gamepad}}:{...b,gamepad};
+}
+export function resetGamepad(b:Bindings,id?:string):Bindings{
+ if(!id)return {...b,gamepad:{...defaultGamepad}};
+ const profiles={...b.profiles};delete profiles[id];return {...b,profiles};
+}
+// Freeze each connected device's mapping for the native launch request, while
+// keeping the saved profiles independent of volatile browser slot numbers.
+export function nativeBindings(){
+ const b=loadBindings();
+ return {...b,gamepads:Object.fromEntries(connectedGamepads().map(p=>[`gamepad${p.index}`,gamepadBindings(b,p.id)]))};
 }
 
 export function keyLabel(code:string):string {

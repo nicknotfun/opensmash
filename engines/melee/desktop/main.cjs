@@ -9,6 +9,7 @@ let window,
   origin,
   launcherOrigin,
   ssb64,
+  sharedPopupPolicy,
   saveWindowState,
   quitting = false;
 if(process.env.OPENSMASH_SHARED_LAUNCHER==='1')app.setPath('userData',process.env.OPENSMASH_DESKTOP_DATA||path.join(app.getPath('appData'),'OpenSmash Integration'));
@@ -92,6 +93,7 @@ else
         const dist = app.isPackaged ? path.join(resources,'shared-web') : path.resolve(__dirname,'../../../web-prototype/dist');
         if(!fs.existsSync(path.join(dist,'index.html')))throw Error('Build the shared website frontend before starting the unified client.');
         const {createSiteHandler}=require(path.join(launcherRoot,'site.cjs'));
+        sharedPopupPolicy=require(path.join(launcherRoot,'window-policy.cjs')).popupPolicy;
         protocol.handle('https',createSiteHandler({dist,backend:origin,token,
           fetchRemote:request=>net.fetch(request,{bypassCustomProtocolHandlers:true})}));
         launcherOrigin='https://smash.fun';
@@ -114,7 +116,7 @@ else
         ...placement.bounds,
         minWidth: 680,
         minHeight: 600,
-        title: "OpenSmash Melee",
+        title: ssb64 ? "OpenSmash" : "OpenSmash Melee",
         backgroundColor: "#0c0905",
         show: false,
         autoHideMenuBar: process.platform !== "darwin",
@@ -168,7 +170,15 @@ else
         if (mainFrame && !inPlace) resetGame();
       });
       window.webContents.on("render-process-gone", resetGame);
+      window.webContents.on('did-create-window', child => {
+        child.webContents.setWindowOpenHandler(() => ({action:'deny'}));
+        child.webContents.on('will-navigate', (event,url) => {
+          if(new URL(url).protocol!=='https:')event.preventDefault();
+        });
+      });
       window.webContents.setWindowOpenHandler(({ url }) => {
+        const policy=sharedPopupPolicy?.(url,launcherOrigin);
+        if(policy?.action==='allow')return policy;
         try {
           const u = new URL(url);
           if (u.protocol === "https:" && externalHosts.has(u.hostname))
@@ -296,7 +306,7 @@ app.on("before-quit", (event) => {
   event.preventDefault();
   quitting = true;
   saveWindowState?.();
-  void ssb64?.stop();
+  const ssb64Stop = ssb64?.stop();
   const stop = origin
     ? fetch(origin + "/api/native/shutdown", {
         method: "POST",
@@ -305,8 +315,7 @@ app.on("before-quit", (event) => {
         signal: AbortSignal.timeout(20000),
       })
     : Promise.resolve();
-  stop
-    .catch(() => {})
+  Promise.allSettled([stop,ssb64Stop])
     .finally(() => {
       backend?.kill();
       surface?.close();

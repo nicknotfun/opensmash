@@ -3,7 +3,8 @@ import { useEffect, useRef, useState } from "react";
 import { desktop } from "@/lib/desktop";
 import { type Fighter } from "../lib/fighter";
 import { plan, type Settings } from "@/lib/launch";
-import { loadBindings } from "@/lib/controls";
+import { pollService } from "../lib/service-poll";
+import { nativeBindings } from "@/lib/controls";
 export default function NativeGame({
   fighter,
   settings,
@@ -71,7 +72,7 @@ export default function NativeGame({
   useEffect(() => {
     const session = crypto.randomUUID();
     let closed = false,
-      timer: ReturnType<typeof setTimeout>;
+      stopPolling: (() => void) | undefined;
     const controller = new AbortController();
     async function request(url: string, body: unknown) {
       const response = await meleeFetch(url, {
@@ -125,30 +126,19 @@ export default function NativeGame({
         }));
         if (closed) return;
         setStatus("Starting Melee…");
-        let launching = true;
-        const poll = async () => {
-          try {
-            const response = await meleeFetch("/api/native/status", { signal: controller.signal });
-            const s = await response.json();
-            if (closed || s.session !== session) return;
-            setStatus(s.message);
-            setGameReady(s.ready);
-            if (s.exitCode && s.exitCode !== 0)
-              setError("Melee stopped unexpectedly. The local native-session.log has details.");
-            if (launching || s.running) timer = setTimeout(poll, 500);
-          } catch (e) {
-            if (!closed) setError((e as Error).message);
+        stopPolling = pollService<any>(meleePath('/api/native/status'), s => {
+          if (s.session !== session) return;
+          setStatus(s.message);
+          setGameReady(Boolean(s.ready));
+          if (s.exitCode != null) {
+            setError(s.exitCode === 0 ? "Game closed. Return to the roster to start another match." : "Melee stopped unexpectedly. The local native-session.log has details.");
+            stopPolling?.();
           }
-        };
-        void poll();
-        try {
-          await request("/api/native/launch", { ...launch, session, controls: loadBindings() });
-        } finally {
-          launching = false;
-        }
+        }, e => setError(e.message));
+        await request("/api/native/launch", { ...launch, session, controls: nativeBindings() });
       } catch (e) {
         controller.abort();
-        clearTimeout(timer);
+        stopPolling?.();
         if (!closed) setError((e as Error).message);
       }
     }
@@ -156,7 +146,7 @@ export default function NativeGame({
     return () => {
       closed = true;
       controller.abort();
-      clearTimeout(timer);
+      stopPolling?.();
       void meleeFetch("/api/native/stop", {
         method: "POST",
         headers: { "Content-Type": "application/json" },

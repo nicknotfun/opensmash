@@ -2677,7 +2677,7 @@ function continueToGame() {
 }
 
 function requestLaunch(fighter) {
-  if (APP_BRIDGE?.requestEngineLaunch?.(fighter)) return;
+  if (APP_BRIDGE?.handlesGameSetup) { launch(fighter); return; }
   if (!hasVerifiedRom()) {
     showLaunchFlow(fighter);
   } else if (requiresControllerTutorial()) {

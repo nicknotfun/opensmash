@@ -14,29 +14,42 @@ function parseLaunch(src){
  // Until the native input bridge is implemented, reject custom assignments.
  const ports=JSON.parse(params.get('ports')||'[null,null,null,null]');
  if(!Array.isArray(ports)||ports.length!==4)throw Error('Four controller ports are required.');
- if(ports.some((p,i)=>p && !(i===0&&(p.kind==='keyboard'||(p.kind==='gamepad'&&p.index===0)))))
+ if(ports.some((p,i)=>p && !['cpu','none','off'].includes(p.kind) && !(i===0&&(p.kind==='keyboard'||(p.kind==='gamepad'&&p.index===0)))))
   throw Error('Custom native Smash 64 controller assignment is not available yet. Use the default player-one device.');
  if(params.has('intro_character'))throw Error('Custom native intro sequences are not available yet.');
  return {params,env};
 }
 function createNativeSsb64({runtime,workspace,fetchAsset=fetch,spawnProcess=spawn}){
- let child,active,abort,status={running:false,ready:false,message:'Ready to launch Smash 64.'};
+ let child,active,abort,revision=0,closing=Promise.resolve(),status={running:false,ready:false,message:'Ready to launch Smash 64.'};
+ function closeProcess(){
+  const previous=child;child=undefined;
+  if(previous&&previous.exitCode===null&&previous.signalCode==null){
+   closing=Promise.all([closing,new Promise(resolve=>{
+    const timer=setTimeout(()=>{previous.kill('SIGKILL');},5000);
+    previous.once('close',()=>{clearTimeout(timer);resolve();});previous.kill();
+   })]).then(()=>{});
+  }
+  return closing;
+ }
  async function stop(session){
   if(session&&active!==session)return;
-  active=undefined;abort?.abort();
-  const previous=child;child=undefined;
-  if(previous&&previous.exitCode===null){
-   await new Promise(resolve=>{const timer=setTimeout(()=>{previous.kill('SIGKILL');},5000);previous.once('close',()=>{clearTimeout(timer);resolve();});previous.kill();});
-  }
-  status={running:false,ready:false,message:'Game closed.'};
+  const ticket=++revision;active=undefined;abort?.abort();
+  await closeProcess();
+  if(ticket===revision)status={running:false,ready:false,message:'Game closed.'};
  }
  async function launch({session,src,soundOn=true}){
   if(typeof session!=='string'||!/^[a-f0-9-]{36}$/.test(session))throw Error('Invalid game session.');
   const {params,env}=parseLaunch(src);
-  await stop();active=session;abort=new AbortController();const signal=abort.signal;
+  const ticket=++revision;abort?.abort();active=session;
+  abort=new AbortController();const signal=abort.signal;
+  status={session,running:false,ready:false,message:'Preparing Smash 64 characters…'};
+  try {
+  await closeProcess();
+  if(ticket!==revision)return;
   const binary=path.join(runtime,process.platform==='win32'?'BattleShip.exe':'BattleShip');
   try{await fs.access(binary);}catch{throw Error('Build or install the native Smash 64 runtime first.');}
   const folder=path.join(workspace,session);await fs.mkdir(folder,{recursive:true});
+  if(ticket!==revision)return;
   status={session,running:false,ready:false,message:'Preparing Smash 64 characters…'};
   async function asset(raw,name){
    if(!raw)return '';
@@ -69,11 +82,18 @@ function createNativeSsb64({runtime,workspace,fetchAsset=fetch,spawnProcess=spaw
   if(signal.aborted||active!==session)return;
   if(!soundOn)env.SSB64_MUTE='1';
   const clean=Object.fromEntries(Object.entries(process.env).filter(([key])=>!key.startsWith('SSB64_')));
-  child=spawnProcess(binary,[],{cwd:runtime,env:{...clean,...env},stdio:'ignore',windowsHide:false});
-  status={session,running:true,ready:true,message:'Smash 64 is running in its native window.'};
-  child.once('error',()=>{if(active===session)status={session,running:false,ready:false,message:'The native engine could not start.'};});
-  child.once('exit',code=>{if(active===session)status={session,running:false,ready:false,message:code?'The native game stopped unexpectedly.':'Game closed.'};});
+  const processChild=spawnProcess(binary,[],{cwd:runtime,env:{...clean,...env},stdio:'ignore',windowsHide:false});
+  child=processChild;
+  status={session,running:true,ready:false,message:'Smash 64 is running in its native window.'};
+  processChild.once('spawn',()=>{if(ticket===revision)status={...status,ready:true};});
+  processChild.once('error',()=>{if(ticket===revision)status={session,running:false,ready:false,message:'The native engine could not start.'};});
+  processChild.once('exit',code=>{if(ticket===revision)status={session,running:false,ready:false,message:code?'The native game stopped unexpectedly.':'Game closed.'};});
   return status;
+  } catch(error) {
+   if(ticket!==revision||signal.aborted)return;
+   status={session,running:false,ready:false,message:error.message};
+   throw error;
+  }
  }
  return {launch,stop,status:()=>status};
 }
