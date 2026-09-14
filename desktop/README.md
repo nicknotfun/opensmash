@@ -6,7 +6,7 @@ remain online services; Melee conversion/process APIs run locally. Native tokens
 never reach the website. Generated website fighters use the same source-export
 and conversion path as the browser's private hosted converter.
 
-Melee renders inside the launcher. SSB64 currently opens its own native window;
+Both Melee and SSB64 render inside the launcher;
 closing the session, switching experiences or quitting stops the engine. The
 standalone Melee release tooling remains available under `engines/melee`.
 
@@ -44,8 +44,7 @@ live mute. The renderer uses browser Gamepad identities and the same saved
 profiles used by the website, including device reconnection. Native engines no
 longer guess how browser indices correspond to SDL devices. A stalled renderer
 releases gamepad input after 500 ms. Melee keyboard mappings use the existing
-embedded input bridge; SSB64 reads its default keyboard layout in its native
-window. Melee keyboard rebinding applies at the next match. Settings dialogs
+embedded input bridge; SSB64 reads the website keyboard layout from the focused launcher canvas. Melee keyboard rebinding applies at the next match. Settings dialogs
 suspend controller input. Native audio follows the website sound preference
 without restarting the engine.
 
@@ -63,3 +62,33 @@ but those require platform-native runtime builds and platform testing. Account
 login, physical multi-controller testing and offline website features remain
 release acceptance checks. The bundled frontend still uses online roster/auth
 services; this is not an offline website mirror.
+
+## Embedded Smash 64 display
+
+The SSB64 runtime advertises `embeddedFrames: 1`. Metal renders to an offscreen
+texture; OpenGL/D3D11 read back their hidden render targets. A bounded triple
+buffer sends RGBA frames to Electron's existing canvas presenter at 960×720.
+The producer drops frames when the renderer falls behind. The hidden native
+window never owns keyboard input; the shared page samples keyboard/gamepads,
+clears held keys on blur and blocks controls while a visible dialog is open.
+Fullscreen fills the launcher window while preserving the game's aspect ratio.
+
+The combined launcher uses the portable shared-memory transport for both engines,
+including Melee on macOS. This avoids a shared-texture mailbox failure observed
+when switching from Smash 64 to Melee. It adds a CPU frame copy; the standalone
+Melee client retains its IOSurface path.
+
+When no local SSB64 archive exists, the launcher asks for the user's ROM using a
+native file picker and runs the bundled extractor in private user data before
+starting the engine. The ROM is neither uploaded nor copied into the app bundle.
+Cancelling or switching experiences cancels preparation and stops the process.
+
+`desktop/native/frame_test.cpp` validates frame publication, channel conversion,
+resizing/flipping and backpressure without a GPU. The macOS Metal path has also
+been checked with a real match, keyboard pause and in-launcher rendering. Other
+native graphics backends still require testing on their target platforms.
+
+Validation: 282 website tests, 46 adapter tests (one platform-specific skip),
+the native frame-buffer tests, real first-ROM extraction and the macOS app/DMG
+package verification pass. UI checks cover embedded play, keyboard pause,
+fullscreen and returning to the roster. Audio was forced off throughout.

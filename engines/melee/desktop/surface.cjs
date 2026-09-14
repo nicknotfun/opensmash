@@ -63,8 +63,8 @@ const keyCodes = {
   ArrowUp: 126,
 };
 
-module.exports = function createSurfaceBridge(directory) {
-  if (process.platform !== "darwin" || process.env.OPENSMASH_FRAME_TRANSPORT === "memory")
+module.exports = function createSurfaceBridge(directory, portable = false) {
+  if (portable || process.platform !== "darwin" || process.env.OPENSMASH_FRAME_TRANSPORT === "memory")
     return require("./frame.cjs")(directory, keyCodes);
   const native = require("./native/build/Release/surface.node");
   const service = "fun.smash.surface." + randomUUID();

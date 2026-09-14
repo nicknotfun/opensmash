@@ -16,11 +16,13 @@ def build(engine,output,jobs):
  context.write_text(text)
  patch=ROOT/'engines/ssb64/native/launcher.patch'
  subprocess.run(['git','apply',str(patch)],cwd=source,check=True)
+ subprocess.run(['git','apply',str(ROOT/'engines/ssb64/native/embedded.patch')],cwd=source,check=True)
+ cmake=source/'CMakeLists.txt';cmake.write_text('include_directories("'+str(ROOT/'desktop/native')+'")\n'+cmake.read_text())
  with (source/'CMakeLists.txt').open('a') as f:
   f.write('\ntarget_include_directories(${PROJECT_NAME} PRIVATE "'+str(ROOT/'engines/ssb64/native')+'" "'+str(ROOT/'desktop/native')+'")\n')
  rom=next((engine/('baserom.us.'+suffix) for suffix in ('z64','n64','v64') if (engine/('baserom.us.'+suffix)).is_file()),engine/'baserom.us.z64')
  subprocess.run([sys.executable,str(ROOT/'build.py'),'native','--vanilla','--battleship',str(source),'--rom',str(rom),'--output-dir',str(output),'--jobs',str(jobs)],check=True,cwd=ROOT)
  binary=output/('BattleShip.exe' if os.name=='nt' else 'BattleShip')
- (output/'opensmash-runtime.json').write_text(json.dumps({'engine':'ssb64','launcherInput':1,'sha256':{binary.name:hashlib.sha256(binary.read_bytes()).hexdigest()}},indent=2)+'\n')
+ (output/'opensmash-runtime.json').write_text(json.dumps({'engine':'ssb64','launcherInput':1,'embeddedFrames':1,'sha256':{binary.name:hashlib.sha256(binary.read_bytes()).hexdigest()}},indent=2)+'\n')
 if __name__=='__main__':
  p=argparse.ArgumentParser(description=__doc__);p.add_argument('--engine',type=Path,default=ROOT.parent/'BattleShip');p.add_argument('--output',type=Path,default=ROOT/'build/shared-ssb64-runtime');p.add_argument('--jobs',type=int,default=8);a=p.parse_args();build(a.engine.resolve(),a.output.resolve(),a.jobs)

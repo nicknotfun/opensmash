@@ -47,8 +47,7 @@ is abortable and survives transient failures. Settings can replace or forget the
 disc. Native sessions are fenced so a cancelled preparation cannot start later.
 
 `desktop` builds a two-engine client from the same website frontend. Its local
-Melee service supports the embedded native surface; SSB64 has its own native
-window. Both engines consume session-scoped logical gamepad packets produced by
+Melee service supports the embedded native surface; SSB64 renders offscreen into the same launcher canvas. Both engines consume session-scoped logical gamepad packets produced by
 the browser's device/profile system and live audio mute. Device reconnection no
 longer relies on matching browser indices to SDL indices. Hidden settings dialogs
 are ignored; visible dialogs suspend input. Melee keyboard rebindings apply on
@@ -76,7 +75,7 @@ secret configuration and durable-storage requirements.
 - Real four-fighter Melee combat rendered inside the packaged shared launcher on
   macOS; keyboard Start paused the active match.
 - Packaged SSB64 rendered a real match with injected fighters and stopped through
-  the launcher. The engine has its own macOS bundle identity.
+  the launcher. Its hidden renderer retains its own macOS bundle identity.
 - Hosted test imported a real source mesh/art set, built a playable costume, and
   returned job/costume/portrait only to the owner; another owner received 404.
 - Apple Silicon app and DMG built; runtime hashes and exclusion of ROM/disc data
@@ -88,7 +87,7 @@ This branch is not deployed. Production service provisioning, account-login
 verification, physical multi-controller testing, fresh user ROM/disc setup,
 Windows/Linux runtime/package testing and public signing/notarization remain.
 The website's online services are still required for roster/auth/creation; an
-offline website mirror is not implemented. SSB64 is a separate native window.
+offline website mirror is not implemented. Both engines are embedded in the shared launcher.
 Automatic assignment of newly connected devices to CPU slots and full touch-layout
 parity remain distinct work. Melee supports per-device stick-axis selection,
 inversion and deadzone through the same logical input sampler in browser/native.

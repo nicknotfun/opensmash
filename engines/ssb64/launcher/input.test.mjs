@@ -8,3 +8,9 @@ test('native N64 consumes the remapped browser layout and preserves device ident
  assert.equal(samplePorts(plan,[{...pad,id:'other'}])[0][1],0);
  assert.equal(samplePorts(plan,[pad],true)[0][2],0);
 });
+
+test('embedded keyboard preserves N64 buttons and opposite directions cancel',async()=>{
+ const {sampleKeyboard}=await import('./input.mjs');
+ assert.deepEqual(sampleKeyboard(new Set(['Enter','KeyJ','KeyW','KeyD'])),[2,1,0x9000,80,80,0,0,0,0]);
+ assert.deepEqual(sampleKeyboard(new Set(['KeyW','KeyS','ArrowLeft','ArrowRight'])),[2,1,0,0,0,0,0,0,0]);
+});

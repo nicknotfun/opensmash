@@ -5,7 +5,7 @@ ROOT=Path(__file__).resolve().parents[1]
 MELEE=ROOT/'engines/melee'
 def stage_ssb64(runtime,output):
  manifest=json.loads((runtime/'opensmash-runtime.json').read_text())
- if manifest.get('launcherInput')!=1:raise ValueError('Rebuild SSB64 with desktop/build_ssb64.py first.')
+ if manifest.get('launcherInput')!=1 or manifest.get('embeddedFrames')!=1:raise ValueError('Rebuild SSB64 with desktop/build_ssb64.py first.')
  for name,digest in manifest['sha256'].items():
   source=(runtime/name).resolve()
   if not source.is_relative_to(runtime.resolve()) or hashlib.sha256(source.read_bytes()).hexdigest()!=digest:raise ValueError('SSB64 runtime hash mismatch: '+name)
@@ -49,6 +49,7 @@ def verify(resources):
  for folder,filename in [('ssb64','opensmash-runtime.json'),('runtime','runtime.json')]:
   root=resources/folder;manifest=json.loads((root/filename).read_text())
   if manifest.get('launcherInput')!=1:raise ValueError('Packaged engine lacks shared controller/audio support: '+folder)
+  if folder=='ssb64' and manifest.get('embeddedFrames')!=1:raise ValueError('Packaged Smash 64 lacks embedded display support')
   for name,digest in manifest['sha256'].items():
    p=(root/name).resolve()
    if not p.is_relative_to(root.resolve()) or hashlib.sha256(p.read_bytes()).hexdigest()!=digest:raise ValueError('Packaged runtime hash mismatch: '+name)

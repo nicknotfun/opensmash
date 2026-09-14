@@ -9,6 +9,8 @@ let window,
   origin,
   launcherOrigin,
   ssb64,
+  ssb64Surface,
+  activeEngine="melee",
   launcherInput,
   sharedPopupPolicy,
   saveWindowState,
@@ -87,10 +89,12 @@ else
   app.whenReady().then(async () => {
     fs.mkdirSync(app.getPath("userData"), { recursive: true });
     try {
-      surface = require("./surface.cjs")(app.getPath("userData"));
+      // Keep both engines on the same canvas transport when switching experiences.
+      surface = require("./surface.cjs")(app.getPath("userData"), sharedLauncher);
       if(sharedLauncher){
         const root=app.isPackaged?path.join(resources,'launcher'):path.resolve(__dirname,'../../../desktop');
         launcherInput=require(path.join(root,'input.cjs')).createInput(app.getPath('userData'));
+        ssb64Surface=require('./frame.cjs')(app.getPath('userData'),{});
       }
       origin = await startBackend();
       launcherOrigin = origin;
@@ -105,7 +109,7 @@ else
         launcherOrigin='https://smash.fun';
         const servicePath=app.isPackaged?path.join(resources,'ssb64-service','service.cjs'):path.resolve(__dirname,'../../ssb64/desktop/service.cjs');
         const {createNativeSsb64}=require(servicePath);
-        ssb64=createNativeSsb64({inputFile:launcherInput?.file,runtime:process.env.OPENSMASH_SSB64_RUNTIME||path.join(resources,'ssb64'),workspace:path.join(app.getPath('userData'),'ssb64-sessions')});
+        ssb64=createNativeSsb64({chooseRom:async()=>{const result=await dialog.showOpenDialog(window,{title:'Choose Smash 64 USA ROM',properties:['openFile'],filters:[{name:'Nintendo 64 ROM',extensions:['z64','n64','v64']}]});return result.canceled?null:result.filePaths[0];},frameEnvironment:ssb64Surface?.environment,inputFile:launcherInput?.file,runtime:process.env.OPENSMASH_SSB64_RUNTIME||path.join(resources,'ssb64'),workspace:path.join(app.getPath('userData'),'ssb64-sessions')});
       }
       session.defaultSession.webRequest.onBeforeSendHeaders(
         { urls: [origin + "/*"] },
@@ -157,6 +161,7 @@ else
       ]));
       if (process.platform !== "darwin") window.setMenuBarVisibility(false);
       surface?.attach(window);
+      ssb64Surface?.attach(window);
       const lifecycle = require("./game-lifecycle.cjs")(async (route, body) => {
         const response = await fetch(origin + route, {
           method: "POST",
@@ -169,6 +174,7 @@ else
         return result;
       }, surface);
       const resetGame = () => {
+        ssb64Surface?.ready(false);
         launcherInput?.stop();
         void ssb64?.stop();
         void lifecycle.reset().catch((error) => {
@@ -216,12 +222,13 @@ else
         validateCaller(event);
         if(!ssb64||request?.engine!=='ssb64')throw Error('Unsupported native engine.');
         await lifecycle.reset();
+        activeEngine="ssb64";
         launcherInput?.begin(request.session);
         return ssb64.launch(request);
       });
       ipcMain.handle('opensmash:stop',async(event,request)=>{
         validateCaller(event);
-        if(request?.engine==='ssb64'){launcherInput?.stop(request.session);return ssb64?.stop(request.session);}
+        if(request?.engine==='ssb64'){if(ssb64?.status().session===request.session)ssb64Surface?.ready(false);launcherInput?.stop(request.session);return ssb64?.stop(request.session);}
         throw Error('Unsupported native engine.');
       });
       ipcMain.handle('opensmash:status',(event,engine)=>{
@@ -233,17 +240,18 @@ else
       ipcMain.handle("melee:begin-game", async (event, session) => {
         validateCaller(event);
         await ssb64?.stop();
+        ssb64Surface?.ready(false);activeEngine="melee";
         const result=await lifecycle.begin(session);
         launcherInput?.begin(session);
         return result;
       });
       ipcMain.on("melee:surface-ready", (event, ready) => {
         validateCaller(event);
-        surface?.ready(ready === true);
+        (activeEngine==="ssb64"?ssb64Surface:surface)?.ready(ready === true);
       });
       ipcMain.on("melee:frame-ack", (event, id) => {
         validateCaller(event);
-        surface?.ack?.(id);
+        (activeEngine==="ssb64"?ssb64Surface:surface)?.ack?.(id);
       });
       ipcMain.on("melee:input", (event, code, down) => {
         validateCaller(event);
@@ -337,6 +345,7 @@ app.on("before-quit", (event) => {
     .finally(() => {
       backend?.kill();
       surface?.close();
+      ssb64Surface?.close();
       launcherInput?.close();
       app.exit();
     });

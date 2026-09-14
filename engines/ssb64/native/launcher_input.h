@@ -12,8 +12,8 @@ inline void LauncherKeyboard(PortInputPad& pad){
 inline void LauncherPads(PortInputPad* pads,int* connected){
  const auto data=OpenSmashLauncher::Read();
  for(unsigned port=0;port<4;++port){const auto o=8+port*16;pads[port]={};
-  if(data[o]==2){LauncherKeyboard(pads[port]);connected[port]=1;}
-  else if(data[o]==3){pads[port].button=data[o+1]?(data[o+2]|data[o+3]<<8):0;pads[port].stick_x=data[o+1]?OpenSmashLauncher::Signed(data,o+4):0;pads[port].stick_y=data[o+1]?OpenSmashLauncher::Signed(data,o+6):0;connected[port]=1;}
+  if(data[o]==2&&!std::getenv("OPENSMASH_FRAME_FILE")){LauncherKeyboard(pads[port]);connected[port]=1;}
+  else if(data[o]==3||data[o]==2){pads[port].button=data[o+1]?(data[o+2]|data[o+3]<<8):0;pads[port].stick_x=data[o+1]?OpenSmashLauncher::Signed(data,o+4):0;pads[port].stick_y=data[o+1]?OpenSmashLauncher::Signed(data,o+6):0;connected[port]=1;}
   else{pads[port].err=8;connected[port]=0;}
  }
 }

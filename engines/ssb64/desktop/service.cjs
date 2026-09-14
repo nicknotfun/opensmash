@@ -19,7 +19,7 @@ function parseLaunch(src,launcherInput=false){
  if(params.has('intro_character'))throw Error('Custom native intro sequences are not available yet.');
  return {params,env};
 }
-function createNativeSsb64({runtime,workspace,inputFile,fetchAsset=fetch,spawnProcess=spawn}){
+function createNativeSsb64({runtime,workspace,inputFile,frameEnvironment,chooseRom,fetchAsset=fetch,spawnProcess=spawn}){
  let child,active,abort,revision=0,closing=Promise.resolve(),status={running:false,ready:false,message:'Ready to launch Smash 64.'};
  function closeProcess(){
   const previous=child;child=undefined;
@@ -51,6 +51,7 @@ function createNativeSsb64({runtime,workspace,inputFile,fetchAsset=fetch,spawnPr
    try{manifest=JSON.parse(await fs.readFile(path.join(runtime,'opensmash-runtime.json'),'utf8'));}catch{}
    if(manifest?.launcherInput!==1)throw Error('Build or install the updated Smash 64 runtime for shared controllers and audio.');
    env.OPENSMASH_LAUNCHER_INPUT=inputFile;
+   if(frameEnvironment){if(manifest.embeddedFrames!==1)throw Error('Rebuild the Smash 64 runtime for embedded display.');Object.assign(env,frameEnvironment);}
   }
   const binary=path.resolve(runtime,manifest?.runner||(process.platform==='win32'?'BattleShip.exe':'BattleShip'));
   if(!binary.startsWith(path.resolve(runtime)+path.sep))throw Error('Invalid native runtime path.');
@@ -92,15 +93,39 @@ function createNativeSsb64({runtime,workspace,inputFile,fetchAsset=fetch,spawnPr
   const clean=Object.fromEntries(Object.entries(process.env).filter(([key])=>!key.startsWith('SSB64_')));
   const workingDirectory=path.resolve(runtime,manifest?.workingDirectory||'.');
   if(workingDirectory!==path.resolve(runtime)&&!workingDirectory.startsWith(path.resolve(runtime)+path.sep))throw Error('Invalid native working directory.');
+  if(frameEnvironment){
+   const archive=path.join(data,'BattleShip.o2r');
+   if(!await fs.stat(archive).then(s=>s.isFile()&&s.size>0).catch(()=>false)){
+    status={session,running:false,ready:false,message:'Choose your Smash 64 USA ROM.'};
+    const rom=await chooseRom?.();
+    if(signal.aborted||ticket!==revision)return;
+    if(!rom)throw Error('Choose a Smash 64 USA ROM to play.');
+    status={session,running:false,ready:false,message:'Preparing your ROM…'};
+    const extraction=path.join(folder,'extract');await fs.mkdir(extraction,{recursive:true});
+    await fs.copyFile(path.join(workingDirectory,'config.yml'),path.join(extraction,'config.yml'));
+    await fs.cp(path.join(workingDirectory,'yamls'),path.join(extraction,'yamls'),{recursive:true});
+    const torch=path.join(path.dirname(binary),process.platform==='win32'?'torch.exe':'torch');
+    const log=await fs.open(path.join(folder,'extraction.log'),'a');
+    try{await new Promise((resolve,reject)=>{
+     if(signal.aborted){resolve();return;}
+     const extractor=spawnProcess(torch,['o2r',rom,'-s',extraction,'-d',extraction],{cwd:extraction,stdio:['ignore',log.fd,log.fd],windowsHide:true});child=extractor;
+     extractor.once('error',reject);extractor.once('close',code=>code===0?resolve():reject(Error('ROM preparation failed. Use an unmodified Smash 64 USA ROM.')));
+    });}finally{await log.close();}
+    if(signal.aborted||ticket!==revision)return;
+    await fs.rename(path.join(extraction,'BattleShip.o2r'),archive);
+   }
+  }
+  if(signal.aborted||ticket!==revision)return;
   const log=await fs.open(path.join(folder,'native-session.log'),'a');
-  let processChild;
-  try{processChild=spawnProcess(binary,[],{cwd:workingDirectory,env:{...clean,...env},stdio:['ignore',log.fd,log.fd],windowsHide:false});}
-  finally{await log.close();}
-  child=processChild;
-  status={session,running:true,ready:false,message:'Smash 64 is running in its native window.'};
-  processChild.once('spawn',()=>{if(ticket===revision)status={...status,ready:true};});
-  processChild.once('error',()=>{if(ticket===revision)status={session,running:false,ready:false,message:'The native engine could not start.'};});
-  processChild.once('exit',code=>{if(ticket===revision)status={session,running:false,ready:false,message:code?'The native game stopped unexpectedly.':'Game closed.'};});
+  try{
+   if(signal.aborted||ticket!==revision)return;
+   const processChild=spawnProcess(binary,[],{cwd:workingDirectory,env:{...clean,...env},stdio:['ignore',log.fd,log.fd],windowsHide:false});
+   child=processChild;
+   status={session,running:true,ready:false,message:frameEnvironment?'Smash 64 is running.':'Smash 64 is running in its native window.'};
+   processChild.once('spawn',()=>{if(ticket===revision)status={...status,ready:true};});
+   processChild.once('error',()=>{if(ticket===revision)status={session,running:false,ready:false,message:'The native engine could not start.'};});
+   processChild.once('exit',code=>{if(ticket===revision)status={session,running:false,ready:false,message:code?'The native game stopped unexpectedly.':'Game closed.'};});
+  }finally{await log.close();}
   return status;
   } catch(error) {
    if(ticket!==revision||signal.aborted)return;
