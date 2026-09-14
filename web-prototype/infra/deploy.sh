@@ -61,7 +61,7 @@ assert_clean_source() {
 # Cloud Build uploads the local filesystem, so fail before any remote mutation
 # if a file included by either Docker context could differ from a commit.
 assert_clean_source "$WORKSPACE_ROOT/pipeline" pipeline \
-  web-prototype pipeline skels assets/portrait_style_refs assets/tpose_style_ref
+  web-prototype engines pipeline skels assets/portrait_style_refs assets/tpose_style_ref
 assert_clean_source "$BATTLESHIP_ROOT" BattleShip web scripts port/css_icons torch decomp
 
 # The engine package no longer ships the ROM-derived archive; the browser

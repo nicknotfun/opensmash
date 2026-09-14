@@ -1,0 +1,109 @@
+import {meleePath} from '../lib/paths.ts';
+import {useEffect,useRef,useState} from 'react';
+import {plan,schema,type Settings} from '@/lib/launch';
+import type {Fighter} from '../lib/fighter';
+import {names} from '../lib/fighter';
+import {connectAudio,unlockAudio,setAudioEnabled} from '@/lib/audio';
+import {stopAnnouncer} from '@/lib/announcer';
+import {claimMelee,releaseMelee} from '@/lib/melee-session';
+import {keyLabel,loadBindings,rawGamepads,type Action} from '@/lib/controls';
+// GameCube button bits in the pad word, keyed by the control id from the bindings module.
+const bits:Record<string,number>={a:0x100,b:0x200,x:0x400,y:0x800,z:0x10,l:0x40,r:0x20,start:0x1000};
+export default function Game({fighter,settings,roster,onClose,soundOn=true}:{fighter:Fighter;settings:Settings;roster:Fighter[];onClose:()=>void;soundOn?:boolean}){
+ useEffect(()=>{setAudioEnabled(soundOn);},[soundOn]);
+ const canvas=useRef<HTMLCanvasElement>(null),[status,setStatus]=useState('Preparing '+fighter.name+'…'),[error,setError]=useState(''),[fps,setFps]=useState<number|null>(null),[attempt,setAttempt]=useState(0);
+ const gameWorker=useRef<Worker|undefined>(undefined);
+ const touch=useRef(new Set<string>());
+ const bindings=loadBindings(),kb=bindings.keyboard;
+ useEffect(()=>{
+  let worker:Worker|undefined,audioNode:AudioWorkletNode|undefined,raf=0,closed=false;const abort=new AbortController(),keys=new Set<string>(),requestedAt=Date.now();
+  let playable=settings.mode!==0, audioConnecting=false;
+  let running=false,firstFrame=true,selectionAcknowledged=false,fullBootVisible=false,frameSamples:number[]=[],launchPlan:any;
+  const skin=new URLSearchParams(location.search).get('skin')==='gx'?'gx':'host';
+  const send=(schedule=true)=>{
+   if(worker&&running){
+    for(let port=0;port<4;port++){
+    const device=launchPlan?.ports[port]?.device;
+    if(device==='off'||device==='cpu') {worker.postMessage({type:'pad',values:[port,0,0x80808080,0,0]});continue;}
+    const held=(action:Action)=>!document.querySelector('dialog[open]')&&device==='keyboard'&&(keys.has(kb[action])||touch.current.has(kb[action]));
+    let buttons=0;for(const [action,bit] of Object.entries(bits))if(held(action as Action))buttons|=bit;
+    let x=128+((held('right')?1:0)-(held('left')?1:0))*100;
+    let y=128+((held('up')?1:0)-(held('down')?1:0))*100;
+    let cx=128+((held('cright')?1:0)-(held('cleft')?1:0))*100;
+    let cy=128+((held('cup')?1:0)-(held('cdown')?1:0))*100;
+    let l=0,r=0;
+    const pad=device?.startsWith('gamepad')?rawGamepads().find(p=>p?.index===Number(device.slice(7))):null;
+    if(pad){
+     const axis=(n:number)=>Math.abs(pad.axes[n]||0)>.15?pad.axes[n]:0;
+     x=Math.round(128+axis(0)*100);y=Math.round(128-axis(1)*100);cx=Math.round(128+axis(2)*100);cy=Math.round(128-axis(3)*100);
+     const mapping:number[]=[];for(const [action,index] of Object.entries(bindings.gamepad))mapping[index]=(mapping[index]||0)|bits[action];
+     mapping[12]|=8;mapping[13]|=4;mapping[14]|=1;mapping[15]|=2;
+     pad.buttons.forEach((b,i)=>{if(b.pressed)buttons|=mapping[i]||0;});l=Math.round((pad.buttons[bindings.gamepad.l]?.value||0)*255);r=Math.round((pad.buttons[bindings.gamepad.r]?.value||0)*255);
+    }
+    worker.postMessage({type:'pad',values:[port,buttons,(x|(y<<8)|(cx<<16)|(cy<<24))>>>0,l|(r<<8),device==='keyboard'||!!pad?1:0]});
+    }
+   }if(schedule)raf=requestAnimationFrame(()=>send());
+  };
+  const code=(e:KeyboardEvent)=>e.code||(/^[a-z]$/i.test(e.key)?'Key'+e.key.toUpperCase():/^[0-9]$/.test(e.key)?'Digit'+e.key:e.key===' '?'Space':e.key);
+  const bound=new Set(Object.values(kb));
+  const keydown=(e:KeyboardEvent)=>{if(document.querySelector('dialog[open]')||(e.target instanceof HTMLElement&&e.target.matches('input,select,textarea,[contenteditable=true]')))return;const key=code(e);if(bound.has(key)){e.preventDefault();keys.add(key);send(false);}};
+  const keyup=(e:KeyboardEvent)=>{keys.delete(code(e));send(false);};
+  const blur=()=>{keys.clear();touch.current.clear();for(let port=0;port<4;port++)worker?.postMessage({type:'pad',values:[port,0,0x80808080,0,launchPlan?.ports[port]?.device==='keyboard'?1:0]});};
+  window.addEventListener('keydown',keydown);window.addEventListener('keyup',keyup);window.addEventListener('blur',blur);
+  async function start(){try{
+   if(!crossOriginIsolated||!canvas.current?.transferControlToOffscreen)throw Error('This browser needs shared memory and OffscreenCanvas support. Open the local game in Chrome.');
+   const session=claimMelee();worker=session.worker;gameWorker.current=worker;
+   launchPlan=plan(settings,fighter,roster);
+   if(new URLSearchParams(location.search).get('benchmark')==='1') {
+    launchPlan.packedPorts=launchPlan.packedPorts.map((p:number,i:number)=>i<2?(p&~0xff00)|256:p);
+    launchPlan.stocks=20;
+   }
+   const costumes=await Promise.all(launchPlan.costumes.map(async (entry:any)=>{
+    const response=await meleeFetch('/api/prepare/'+encodeURIComponent(entry.character)+'?target='+encodeURIComponent(entry.target)+'&color='+entry.color+(skin==='host'?'&skin=host'+(launchPlan.costumes.length>=3?'&compact=1':''):''),{method:'POST',signal:abort.signal});
+    const costume=await response.json();if(!response.ok)throw Error(costume.error||'The character could not be prepared.');
+    const asset=await meleeFetch(costume.url,{signal:abort.signal});if(!asset.ok)throw Error('The costume could not load.');
+    return {filename:costume.filename,blob:await asset.blob()};
+   }));
+   const cssAssets = [];
+   if (costumes.length) {
+    setStatus('Preparing character select…');
+    const response = await meleeFetch('/api/character-select', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({costumes:launchPlan.costumes}), signal:abort.signal});
+    const prepared = await response.json();if(!response.ok)throw Error(prepared.error || 'Character select could not be prepared.');
+    for (const entry of prepared.assets) {
+     const asset = await meleeFetch(entry.url, {signal:abort.signal});if(!asset.ok)throw Error('Character select assets could not load.');
+     cssAssets.push({filename:entry.filename,blob:await asset.blob()});
+    }
+   }
+   setStatus('Loading Melee…');if(closed)return;
+   const audio=session.audio;
+   const startAudio=()=>{if(audioConnecting)return;audioConnecting=true;connectAudio(audio).then(node=>{if(closed)node.disconnect();else audioNode=node;}).catch(()=>{audioConnecting=false;});};
+   if(playable)startAudio();
+   worker.onerror=e=>{if(!closed)setError(e.message||'The game worker stopped.');};
+   worker.onmessage=({data})=>{
+    if(closed)return;
+    if(data.type==='frame'){canvas.current?.getContext('bitmaprenderer')?.transferFromImageBitmap(data.bitmap);if(firstFrame){firstFrame=false;canvas.current?.focus();}}
+    if(data.type==='session' && data.launch)selectionAcknowledged=true;
+    if(data.type==='frame' && settings.mode===4 && selectionAcknowledged && !fullBootVisible){fullBootVisible=true;setStatus('');}
+    if(data.type==='status' && !fullBootVisible)setStatus(data.message);
+    if(data.type==='started'){running=true;}
+    if(data.type==='intro'){stopAnnouncer();setStatus('');startAudio();}
+    if(data.type==='playable'){playable=true;setStatus('');startAudio();}
+    if(data.type==='error'){setError(previous=>previous||data.message);running=false;}
+    if(data.type==='log'){console.log('[Melee]',data.text);if(playable&&data.text.includes('[opensmash] destination ready'))setStatus('');}
+    if(data.type==='metrics'){
+     setFps(playable&&data.completeCombatInterval!==false&&data.combatFrames>0?data.fps:null);frameSamples.push(...data.frameTimes);if(frameSamples.length>36000)frameSamples=frameSamples.slice(-36000);
+     (window as any).meleePerformance={frames:data.frames,fps:data.fps,frameTimes:frameSamples};
+    }
+   };
+   await session.ready;if(closed)return;running=true;
+   worker.postMessage({type:'select',requestedAt,warmReadyBeforeClick:session.readyAt<=requestedAt,character:fighter.slug,skin,fighter:launchPlan.ports[0].fighter,launch:launchPlan,costumes,cssAssets});
+   raf=requestAnimationFrame(()=>send());
+  }catch(e){if(!closed)setError((e as Error).message);}}
+  start();
+  return()=>{closed=true;abort.abort();cancelAnimationFrame(raf);if(worker)releaseMelee(worker);audioNode?.disconnect();window.removeEventListener('keydown',keydown);window.removeEventListener('keyup',keyup);window.removeEventListener('blur',blur);touch.current.clear();};
+ },[fighter,settings,roster,attempt]);
+ const control=(label:string,code:string)=><button key={code} onPointerDown={e=>{e.currentTarget.setPointerCapture(e.pointerId);touch.current.add(code);}} onPointerUp={()=>touch.current.delete(code)} onPointerCancel={()=>touch.current.delete(code)}>{label}</button>;
+ return <div className="game-overlay" role="region" aria-label={'Play as '+fighter.name}><section className="game-panel"><header><div><h2>{fighter.name}</h2><p>{names[settings.ports[0].target && settings.ports[0].target !== 'auto' ? settings.ports[0].target : fighter.target]} moveset · {schema.modes.find(m=>m.id===settings.mode)?.label}</p></div><span className="fps" data-slow={fps!==null&&fps<58.5} title="Target: sustained 60 FPS in combat">{fps===null?'':Math.round(fps)+' FPS'}</span><button onClick={()=>{const panel=canvas.current?.closest('.intro-video-frame');if(document.fullscreenElement)void document.exitFullscreen();else void panel?.requestFullscreen();}} aria-label="Toggle fullscreen">⛶</button><button onClick={()=>{if(document.fullscreenElement)void document.exitFullscreen();onClose();}} aria-label="Return to roster">✕</button></header><div className="game-screen"><canvas id="canvas" key={attempt} ref={canvas} width={960} height={720} tabIndex={0}/>{status&&!error&&<p className="game-message" role="status">{status}</p>}{error&&<div className="game-message" role="alert"><p>{error}</p><button onClick={()=>{setError('');setStatus('Preparing…');setFps(null);setAttempt(n=>n+1);}}>Try again</button></div>}</div><button className="sound-game" onClick={()=>void unlockAudio()}>Enable sound</button><button className="confirm-game" onClick={()=>gameWorker.current?.postMessage({type:'confirm'})}>Confirm · A</button><p className="game-help">{[keyLabel(kb.up),keyLabel(kb.left),keyLabel(kb.down),keyLabel(kb.right)].join(' ')} move · {keyLabel(kb.a)} attack · {keyLabel(kb.b)} special · {keyLabel(kb.x)} / {keyLabel(kb.y)} jump · {keyLabel(kb.l)} / {keyLabel(kb.r)} shield · {keyLabel(kb.z)} grab · {[kb.cup,kb.cleft,kb.cdown,kb.cright].map(keyLabel).join(' ')} smash · {keyLabel(kb.start)} start / pause<br/>Rebind keys and gamepads under Controls. Press {keyLabel(kb.a)} to confirm any first-run memory card prompt.</p><div className="touch-controls">{control('←',kb.left)}{control('↑',kb.up)}{control('↓',kb.down)}{control('→',kb.right)}{control('Attack',kb.a)}{control('Special',kb.b)}{control('Jump',kb.x)}{control('Shield',kb.l)}{control('Start',kb.start)}</div></section></div>;
+}
+
+function meleeFetch(input:string, init?:RequestInit){return fetch(meleePath(input),init);}

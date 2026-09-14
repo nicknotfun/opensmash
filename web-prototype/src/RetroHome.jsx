@@ -234,6 +234,7 @@ export default function RetroHome({
   authorized,
   developmentMode,
   engine,
+  engineContent,
   engineRef,
   gameFrameRef,
   gamepadCount = 0,
@@ -650,7 +651,8 @@ export default function RetroHome({
                 }}
               />
               <canvas className="intro-video-rule-layer" aria-hidden="true" />
-              <iframe ref={engineRef} id="intro-game-frame" className="intro-game-frame" src={engine?.src || "about:blank"} title={engine ? "Smash.fun game engine" : "Smash.fun game"} allow="autoplay; gamepad; fullscreen" />
+              {engineContent && <div className="melee-surface">{engineContent}</div>}
+              <iframe ref={engineRef} id="intro-game-frame" className="intro-game-frame" src={engineContent?"about:blank":engine?.src || "about:blank"} title={engine ? "Smash.fun game engine" : "Smash.fun game"} allow="autoplay; gamepad; fullscreen" />
               {engine && <button
                 className="game-fullscreen-control"
                 type="button"

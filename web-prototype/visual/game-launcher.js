@@ -2398,6 +2398,7 @@ function registerControlInput(key, repeated) {
 }
 
 function showControlsPreview() {
+  if(APP_BRIDGE?.showEngineControls){APP_BRIDGE.showEngineControls();return;}
   if (!overlay || !overlay.hidden) return;
   lockLaunchFlowScroll();
   preloadLaunchSounds();
@@ -2676,6 +2677,7 @@ function continueToGame() {
 }
 
 function requestLaunch(fighter) {
+  if (APP_BRIDGE?.requestEngineLaunch?.(fighter)) return;
   if (!hasVerifiedRom()) {
     showLaunchFlow(fighter);
   } else if (requiresControllerTutorial()) {

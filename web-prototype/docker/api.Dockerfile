@@ -5,6 +5,13 @@ WORKDIR /workspace/pipeline/web-prototype
 COPY pipeline/web-prototype/package.json pipeline/web-prototype/pnpm-lock.yaml pipeline/web-prototype/pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 COPY pipeline/web-prototype/ ./
+COPY pipeline/engines/ssb64/launcher /workspace/pipeline/engines/ssb64/launcher
+COPY pipeline/engines/melee/launcher /workspace/pipeline/engines/melee/launcher
+COPY pipeline/engines/melee/web/app /workspace/pipeline/engines/melee/web/app
+COPY pipeline/engines/melee/web/lib /workspace/pipeline/engines/melee/web/lib
+COPY pipeline/engines/melee/web/public/catalog.json /workspace/pipeline/engines/melee/web/public/catalog.json
+COPY pipeline/engines/melee/runtime/launch-options.json /workspace/pipeline/engines/melee/runtime/launch-options.json
+COPY pipeline/engines/melee/runtime/web/launch-options.mjs /workspace/pipeline/engines/melee/runtime/web/launch-options.mjs
 RUN pnpm build
 
 FROM node:22-bookworm-slim
@@ -15,6 +22,7 @@ COPY pipeline/web-prototype/package.json pipeline/web-prototype/pnpm-lock.yaml p
 RUN pnpm install --prod --frozen-lockfile
 COPY --from=build /workspace/pipeline/web-prototype/dist ./dist
 COPY pipeline/web-prototype/server ./server
+COPY pipeline/engines/melee/server /workspace/pipeline/engines/melee/server
 COPY pipeline/web-prototype/shared ./shared
 COPY pipeline/web-prototype/config ./config
 COPY pipeline/web-prototype/visual ./visual

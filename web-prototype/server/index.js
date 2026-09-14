@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { gzip as gzipCallback } from "node:zlib";
+import { createMeleeHandler } from "../../engines/melee/server/handler.mjs";
 import { createFighterJobs } from "./fighter-jobs.js";
 import { createTurnstileVerifier } from "./turnstile.js";
 import { HandoffError, createHandoffRoomsFromEnv } from "./handoff-rooms.js";
@@ -31,6 +32,7 @@ import { bakedRosterEntries } from "../shared/baked-roster.js";
 import { ROMS_BY_SHA1, UNSUPPORTED_ROMS_BY_SHA1 } from "../shared/rom-catalog.js";
 import { ACTIVE_JOB_STATUSES } from "./job-protocol.js";
 
+const handleMelee = createMeleeHandler();
 const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const {
   pipelineProjectRoot: PIPELINE_PROJECT_ROOT,
@@ -40,6 +42,8 @@ const {
 const DIST_ROOT = path.join(APP_ROOT, "dist");
 const APP_SHELL_PATHS = new Set([
   "/",
+  "/melee",
+  "/melee/",
   "/create",
   "/create/",
   "/trailer",
@@ -798,6 +802,11 @@ async function serveAppShell(req, res) {
 async function handleRequest(req, res, vite) {
   const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
   const { pathname } = url;
+  if (/^\/melee(?:\/|$)/.test(pathname)) {
+    res.setHeader('Cross-Origin-Opener-Policy','same-origin');
+    res.setHeader('Cross-Origin-Embedder-Policy','require-corp');
+  }
+  if(handleMelee(req,res))return;
   // Firebase's hosted sign-in helper, served from our origin (see auth.js).
   // It carries no cookies either way and is never edge-cached.
   if (isAuthHandlerPath(pathname)) {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import flowMusicUrl from "../visual/assets/skyward-save.mp3?url";
 import viewportLogoUrl from "../visual/assets/branding/super-weights-bros-stacked-white.png?url";
 import AuthGate from "./AuthGate.jsx";
@@ -331,7 +331,16 @@ function CreateExperienceOverlay({ onAuthenticated, onClose, onCreated, onPlay, 
   );
 }
 
+const NativeSsb64 = lazy(()=>import('../../engines/ssb64/launcher/NativeGame.jsx'));
+const MeleeExperience = lazy(()=>import('../../engines/melee/launcher/Experience.tsx'));
+const MeleeControls = lazy(()=>import('../../engines/melee/web/app/Controls.tsx'));
+const MeleeSettings = lazy(()=>import('../../engines/melee/launcher/Experience.tsx').then(m=>({default:m.MeleeSettings})));
+
 export default function App() {
+  const nativeSsb64=Boolean(window.openSmashDesktop?.engines?.ssb64);
+  const isMelee = /^\/melee(?:\/|$)/.test(window.location.pathname);
+  function launchMelee(action){setEngine({experience:'melee',id:crypto.randomUUID(),action:{...action,portPlan:controllerPlan(advancedOptions,gamepads)}});setPendingAction(null);}
+
   useEffect(installPerformanceCapture, []);
   const isCreatePage = window.location.pathname.replace(/\/+$/, "") === "/create";
   const isTrailerPage = window.location.pathname.replace(/\/+$/, "") === "/trailer";
@@ -930,6 +939,7 @@ export default function App() {
   }
 
   function launch(action) {
+    if(isMelee){launchMelee(action);return;}
     try {
       const launchOptions = launchOptionsFor(action);
       const launchAction = prepareLaunchAction(action, launchOptions);
@@ -1035,11 +1045,13 @@ export default function App() {
   }
 
   async function requestLaunch(action) {
+    if(isMelee){launchMelee(action);return;}
     setPageError("");
     if (isCreatePage && controlsRoadblockRequired()) {
       window.location.assign("/");
       return;
     }
+    if(nativeSsb64){launch(action);return;}
     const session = authorized ? null : await getSession();
     if (authorized || session?.authorized) {
       setAuthorized(true);
@@ -1196,6 +1208,7 @@ export default function App() {
       return "about:blank";
     }
     try {
+      if(isMelee){launchMelee(action);return "about:blank";}
       const launchOptions = launchOptionsFor(action);
       const launchAction = prepareLaunchAction(action, launchOptions);
       const src = engineUrl(launchAction, launchOptions, gamepads);
@@ -1526,6 +1539,8 @@ export default function App() {
     Object.assign(visualBridgeRef.current, {
       characters,
       fighterJobs,
+      showEngineControls: isMelee ? ()=>setAdvancedOpen(true) : undefined,
+      requestEngineLaunch: (isMelee||nativeSsb64) ? (fighter)=>{launchVisualAction({type:fighter.actionType||'character',slug:fighter.slug});return true;} : undefined,
       announceCharacter(slug) {
         const character = characters.find((candidate) => candidate.slug === slug);
         if (character) announceCharacter(character);
@@ -1567,7 +1582,12 @@ export default function App() {
           <TrailerSetup characters={characters} loading={loadingCharacters || loadingSession}
             onBoot={setTrailerSetup} />
         )}
+        <label className="experience-selector">Experience<select aria-label="Experience" value={isMelee?'melee':'ssb64'} onChange={e=>{
+          if(engine && !window.confirm('Leave the current game and switch experiences?'))return;
+          window.location.assign(e.target.value==='melee'?'/melee':'/');
+        }}><option value="ssb64">Smash 64</option><option value="melee">Melee</option></select></label>
         <RetroHome
+          engineContent={engine?.experience==='melee'?<Suspense fallback={<p>Loading Melee…</p>}><MeleeExperience key={engine.id} action={engine.action} onClose={()=>setEngine(null)} soundOn={soundOn}/></Suspense>:nativeSsb64&&engine?<Suspense fallback={<p>Loading Smash 64…</p>}><NativeSsb64 key={engine.src} src={engine.src} onClose={()=>setEngine(null)} soundOn={soundOn}/></Suspense>:null}
           aboutOpen={aboutOpen}
           advancedActive={hasAdvancedOverrides(advancedOptions)}
           authorized={authorized}
@@ -1626,6 +1646,8 @@ export default function App() {
           onSaveSettings={saveFighterSettings}
         />
         <SettingsModal
+          engineControls={isMelee?<Suspense fallback={<p>Loading bindings…</p>}><MeleeControls/></Suspense>:null}
+          engineSettings={isMelee?<Suspense fallback={<p>Loading Melee settings…</p>}><MeleeSettings/></Suspense>:null}
           accountConnected={Boolean(user)}
           authorized={authorized}
           debugMode={new URLSearchParams(window.location.search).get("debug") === "1"}
