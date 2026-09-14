@@ -637,6 +637,9 @@ export default function RetroHome({
               <iframe
                 ref={introVideoRef}
                 id="intro-video"
+                // Melee needs cross-origin isolation for WASM threads. Load the
+                // public trailer without credentials so COEP can embed YouTube.
+                credentialless=""
                 className="intro-video"
                 src={TRAILER_EMBED_URL}
                 title="smash.fun Introduction"

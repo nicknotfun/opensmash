@@ -340,7 +340,18 @@ const MeleeSettings = lazy(()=>import('../../engines/melee/launcher/Experience.t
 
 export default function App() {
   const nativeSsb64=Boolean(window.openSmashDesktop?.engines?.ssb64);
-  const isMelee = /^\/melee(?:\/|$)/.test(window.location.pathname);
+  const [isMelee, setIsMelee] = useState(() => /^\/melee(?:\/|$)/.test(window.location.pathname));
+  function syncExperience() {
+    setEngine(null);
+    setPendingAction(null);
+    setAdvancedOpen(false);
+    setImmersive(false);
+    setIsMelee(/^\/melee(?:\/|$)/.test(window.location.pathname));
+  }
+  useEffect(() => {
+    window.addEventListener('popstate', syncExperience);
+    return () => window.removeEventListener('popstate', syncExperience);
+  }, []);
   function launchMelee(action){setEngine({experience:'melee',id:crypto.randomUUID(),action:{...action,selectionMode:advancedOptions.selectionMode,portPlan:controllerPlan(advancedOptions,gamepads)}});setPendingAction(null);}
 
   useEffect(installPerformanceCapture, []);
@@ -1593,7 +1604,8 @@ export default function App() {
         )}
         <label className="experience-selector">Experience<select aria-label="Experience" value={isMelee?'melee':'ssb64'} onChange={e=>{
           if(engine && !window.confirm('Leave the current game and switch experiences?'))return;
-          window.location.assign(e.target.value==='melee'?'/melee':'/');
+          window.history.pushState({}, '', e.target.value==='melee'?'/melee':'/');
+          syncExperience();
         }}><option value="ssb64">Smash 64</option><option value="melee">Melee</option></select></label>
         <RetroHome
           engineContent={engine?.experience==='melee'?<Suspense fallback={<p>Loading Melee…</p>}><MeleeExperience key={engine.id} action={engine.action} onClose={()=>setEngine(null)} soundOn={soundOn}/></Suspense>:nativeSsb64&&engine?<Suspense fallback={<p>Loading Smash 64…</p>}><NativeSsb64 key={engine.src} src={engine.src} onClose={()=>setEngine(null)} soundOn={soundOn}/></Suspense>:null}
