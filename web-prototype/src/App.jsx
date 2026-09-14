@@ -393,6 +393,7 @@ export default function App() {
   // first one at the document level (capture phase, so nothing can swallow it)
   // and fan it out to every audio source: trailer iframe, flow music, engine
   // AudioContext. The sound preference stays the single override.
+  useEffect(()=>{window.openSmashDesktop?.mute(!soundOn);},[soundOn]);
   const [audioUnlocked, setAudioUnlocked] = useState(false);
   // The home-page trailer only goes audible after the viewer explicitly turns
   // sound on through the site's own toggle (or unmutes the player itself). A

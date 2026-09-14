@@ -1,3 +1,4 @@
+import {gameInputBlocked} from '../lib/controls';
 import {meleePath} from '../lib/paths.ts';
 import {useEffect,useRef,useState} from 'react';
 import {plan,schema,type Settings} from '@/lib/launch';
@@ -6,7 +7,7 @@ import {names} from '../lib/fighter';
 import {connectAudio,unlockAudio,setAudioEnabled} from '@/lib/audio';
 import {stopAnnouncer} from '@/lib/announcer';
 import {claimMelee,releaseMelee} from '@/lib/melee-session';
-import {keyLabel,loadBindings,rawGamepads,gamepadBindings,type Action} from '@/lib/controls';
+import {keyLabel,loadBindings,rawGamepads,sampleMeleePad,type Action} from '@/lib/controls';
 // GameCube button bits in the pad word, keyed by the control id from the bindings module.
 const bits:Record<string,number>={a:0x100,b:0x200,x:0x400,y:0x800,z:0x10,l:0x40,r:0x20,start:0x1000};
 export default function Game({fighter,settings,roster,onClose,soundOn=true}:{fighter:Fighter;settings:Settings;roster:Fighter[];onClose:()=>void;soundOn?:boolean}){
@@ -25,7 +26,7 @@ export default function Game({fighter,settings,roster,onClose,soundOn=true}:{fig
     for(let port=0;port<4;port++){
     const device=launchPlan?.ports[port]?.device;
     if(device==='off'||device==='cpu') {worker.postMessage({type:'pad',values:[port,0,0x80808080,0,0]});continue;}
-    const held=(action:Action)=>!document.querySelector('dialog[open]')&&device==='keyboard'&&(keys.has(kb[action])||touch.current.has(kb[action]));
+    const held=(action:Action)=>!gameInputBlocked()&&device==='keyboard'&&(keys.has(kb[action])||touch.current.has(kb[action]));
     let buttons=0;for(const [action,bit] of Object.entries(bits))if(held(action as Action))buttons|=bit;
     let x=128+((held('right')?1:0)-(held('left')?1:0))*100;
     let y=128+((held('up')?1:0)-(held('down')?1:0))*100;
@@ -33,13 +34,9 @@ export default function Game({fighter,settings,roster,onClose,soundOn=true}:{fig
     let cy=128+((held('cup')?1:0)-(held('cdown')?1:0))*100;
     let l=0,r=0;
     const pad=device?.startsWith('gamepad')?rawGamepads().find(p=>p?.index===Number(device.slice(7))):null;
-    if(pad&&!document.querySelector('dialog[open]')){
-     const buttonsForPad=gamepadBindings(loadBindings(),pad.id);
-     const axis=(n:number)=>Math.abs(pad.axes[n]||0)>.15?pad.axes[n]:0;
-     x=Math.round(128+axis(0)*100);y=Math.round(128-axis(1)*100);cx=Math.round(128+axis(2)*100);cy=Math.round(128-axis(3)*100);
-     const mapping:number[]=[];for(const [action,index] of Object.entries(buttonsForPad))mapping[index]=(mapping[index]||0)|bits[action];
-     mapping[12]|=8;mapping[13]|=4;mapping[14]|=1;mapping[15]|=2;
-     pad.buttons.forEach((b,i)=>{if(b.pressed)buttons|=mapping[i]||0;});l=Math.round((pad.buttons[buttonsForPad.l]?.value||0)*255);r=Math.round((pad.buttons[buttonsForPad.r]?.value||0)*255);
+    if(pad&&!gameInputBlocked()){
+     const sample=sampleMeleePad(pad);
+     buttons|=sample[2];x=128+sample[3];y=128+sample[4];cx=128+sample[5];cy=128+sample[6];l=sample[7];r=sample[8];
     }
     worker.postMessage({type:'pad',values:[port,buttons,(x|(y<<8)|(cx<<16)|(cy<<24))>>>0,l|(r<<8),device==='keyboard'||!!pad?1:0]});
     }
@@ -47,7 +44,7 @@ export default function Game({fighter,settings,roster,onClose,soundOn=true}:{fig
   };
   const code=(e:KeyboardEvent)=>e.code||(/^[a-z]$/i.test(e.key)?'Key'+e.key.toUpperCase():/^[0-9]$/.test(e.key)?'Digit'+e.key:e.key===' '?'Space':e.key);
   const bound=new Set(Object.values(kb));
-  const keydown=(e:KeyboardEvent)=>{if(document.querySelector('dialog[open]')||(e.target instanceof HTMLElement&&e.target.matches('input,select,textarea,[contenteditable=true]')))return;const key=code(e);if(bound.has(key)){e.preventDefault();keys.add(key);send(false);}};
+  const keydown=(e:KeyboardEvent)=>{if(gameInputBlocked()||(e.target instanceof HTMLElement&&e.target.matches('input,select,textarea,[contenteditable=true]')))return;const key=code(e);if(bound.has(key)){e.preventDefault();keys.add(key);send(false);}};
   const keyup=(e:KeyboardEvent)=>{keys.delete(code(e));send(false);};
   const blur=()=>{keys.clear();touch.current.clear();for(let port=0;port<4;port++)worker?.postMessage({type:'pad',values:[port,0,0x80808080,0,launchPlan?.ports[port]?.device==='keyboard'?1:0]});};
   window.addEventListener('keydown',keydown);window.addEventListener('keyup',keyup);window.addEventListener('blur',blur);

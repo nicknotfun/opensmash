@@ -1,48 +1,65 @@
-# Shared native launcher (experimental)
+# Shared native launcher
 
-`site.cjs` serves the **bundled** frontend under the website origin inside Electron.
-Website APIs and authentication remain online services; `/melee/api` requests go
-to the token-protected local Melee backend. Native credentials never reach the
-website. Hashed frontend assets must exist in the bundle; missing assets do not
-silently fall back to a different live frontend release.
+The client bundles the same `web-prototype` frontend as smash.fun. The experience
+selector chooses SSB64 or Melee. Website authentication, roster and creation APIs
+remain online services; Melee conversion/process APIs run locally. Native tokens
+never reach the website. Generated website fighters use the same source-export
+and conversion path as the browser's private hosted converter.
 
-The host currently reuses the Melee Electron surface and lifecycle implementation
-under `engines/melee/desktop`. Its normal standalone release remains available.
-Shared mode has a separate `OpenSmash Integration` user-data directory, so it does
-not replace the settings or disc setup of an existing Melee installation.
+Melee renders inside the launcher. SSB64 currently opens its own native window;
+closing the session, switching experiences or quitting stops the engine. The
+standalone Melee release tooling remains available under `engines/melee`.
 
-## Develop
+## Build and develop
 
-1. Install frontend dependencies in `web-prototype`, and the existing Melee web,
-   desktop and Python dependencies under `engines/melee`.
-2. Prepare the existing Melee runtime/character payloads using its native release
-   tooling. They belong in `engines/melee/build`, never in source control.
-3. Build SSB64 using the root `build.py native` command.
-4. Run with the Python environment containing Melee's native service dependencies:
+Install the existing website, Melee web/Electron and Python dependencies first.
+Use the engine Python environment for all commands (it must include PyInstaller).
+Prepare Melee runtime and source-character payloads in `engines/melee/build` with
+its existing release tools. Rebuild the Melee runtime after changing native
+patches: shared packages require `launcherInput: 1` in both runtime manifests.
 
 ```sh
-OPENSMASH_SSB64_RUNTIME=/absolute/path/to/native-ssb64-build python desktop/dev.py
+python desktop/build_ssb64.py --engine /absolute/path/to/BattleShip
+OPENSMASH_SSB64_RUNTIME=/absolute/path/to/build/shared-ssb64-runtime python desktop/dev.py
+python desktop/package.py                 # local installer, never publishes
+python desktop/package.py --dir           # unpacked app only
 ```
 
-`OPENSMASH_DESKTOP_DATA` optionally selects another test-only user-data directory.
-The SSB64 adapter opens the native engine window and stops its process when the
-launcher closes the session or changes experiences. Melee uses its existing
-embedded native surface. Only default player-one native SSB64 input is currently
-supported; custom assignments are rejected rather than silently ignored.
+SSB64 builds in an isolated snapshot under `build`; the sibling source repository
+is not edited. The installer explicitly stages executables, extraction recipes,
+fonts, renderer assets and licenses, excluding ROMs and `BattleShip.o2r`. macOS
+non-system libraries are copied recursively and relinked within the package.
+Both runtime manifests are hash-verified after packaging. Game data is supplied
+locally by the user, and saves/configuration live under launcher user data.
 
-## Remaining release requirements
+Packaged data lives in `OpenSmash`; development uses `OpenSmash Integration`.
+`OPENSMASH_DESKTOP_DATA` overrides this for isolated tests.
+`OPENSMASH_FORCE_MUTE=1` forces both web and native audio off during testing. Keep generated build
+outputs and private test workspaces out of source control and release uploads.
 
-This is not a distributable two-engine client yet. Remaining work includes SSB64
-runtime packaging without game-derived assets, portable dependencies, shared
-native input profiles/hot-plugging, offline roster and asset persistence, end-to-end OAuth
-verification, audio changes during native matches, and full engine/UI parity
-checks on both Windows and macOS. The shared mode is opt-in and no hosted release
-trigger has been changed.
+## Input and audio
 
-Run adapter tests with `node --test desktop/*.test.cjs engines/ssb64/desktop/*.test.cjs`.
+A session-scoped 80-byte local packet carries four logical controller states and
+live mute. The renderer uses browser Gamepad identities and the same saved
+profiles used by the website, including device reconnection. Native engines no
+longer guess how browser indices correspond to SDL devices. A stalled renderer
+releases gamepad input after 500 ms. Melee keyboard mappings use the existing
+embedded input bridge; SSB64 reads its default keyboard layout in its native
+window. Melee keyboard rebinding applies at the next match. Settings dialogs
+suspend controller input. Native audio follows the website sound preference
+without restarting the engine.
 
-The shared Settings menu and macOS shortcut now include Melee disc management and
-per-controller button profiles. The native host permits only the website's auth
-handler to open a sandboxed popup without the engine preload. Trailer playback
-was checked on both experience routes. Native device identity mapping, SSB64
-custom bindings, and live engine audio remain separate parity work.
+Run `node --test desktop/*.test.cjs engines/ssb64/desktop/*.test.cjs
+engines/ssb64/launcher/*.test.mjs` plus the engine and website suites. The native
+`opensmash-embedded-test` validates keyboard pulses, packet decoding, mute and the
+stalled-renderer watchdog.
+
+## Release checks
+
+Local Apple Silicon app/DMG builds are supported and verified. Public macOS
+releases still need the project's signing/notarization setup; the local build is
+ad-hoc signed. The configuration retains Windows NSIS and Linux tar targets,
+but those require platform-native runtime builds and platform testing. Account
+login, physical multi-controller testing and offline website features remain
+release acceptance checks. The bundled frontend still uses online roster/auth
+services; this is not an offline website mirror.

@@ -287,6 +287,10 @@ class NativeService:
         return {"ready": True}
 
     def check_controllers(self, ports):
+        if os.environ.get("OPENSMASH_LAUNCHER_INPUT"):
+            if self.manifest.get("launcherInput") != 1:
+                raise ValueError("Install the updated native runtime for shared controller input and audio.")
+            return []
         pads = []
         if any(p["device"].startswith("gamepad") for p in ports):
             helper = self.runtime / self.manifest["controllers"]
@@ -358,7 +362,15 @@ class NativeService:
             d = p["device"]
             if d in ["cpu", "off"]:
                 continue
-            if d.startswith("gamepad"):
+            if d.startswith("gamepad") and os.environ.get("OPENSMASH_LAUNCHER_INPUT"):
+                device = "OpenSmash/0/Pad" + str(i + 1)
+                names = {"a":"A","b":"B","x":"X","y":"Y","z":"Z","l":"L","r":"R","start":"Start",
+                         "up":"StickUp","down":"StickDown","left":"StickLeft","right":"StickRight",
+                         "cup":"CUp","cdown":"CDown","cleft":"CLeft","cright":"CRight"}
+                bindings = {self.BINDING_TARGETS[k]: quote(v) for k,v in names.items()}
+                bindings.update({"Triggers/L-Analog":"`AnalogL`", "Triggers/R-Analog":"`AnalogR`",
+                                 "D-Pad/Up":"`Up`","D-Pad/Down":"`Down`","D-Pad/Left":"`Left`","D-Pad/Right":"`Right`"})
+            elif d.startswith("gamepad"):
                 index = int(d[-1])
                 device = pads[index]
                 bindings = dict(pad_bind)

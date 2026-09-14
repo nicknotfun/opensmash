@@ -77,6 +77,8 @@ contextBridge.exposeInMainWorld(
 );
 
 if(process.argv.includes('--opensmash-shared-launcher'))contextBridge.exposeInMainWorld('openSmashDesktop',Object.freeze({
+ input:(session,ports)=>ipcRenderer.send('opensmash:input',session,ports),
+ mute:value=>ipcRenderer.send('opensmash:mute',value),
  protocol:1,engines:Object.freeze({ssb64:true,melee:true}),
  launch:request=>ipcRenderer.invoke('opensmash:launch',request),
  stop:request=>ipcRenderer.invoke('opensmash:stop',request),

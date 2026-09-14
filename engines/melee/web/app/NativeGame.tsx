@@ -1,10 +1,11 @@
+import {gameInputBlocked} from '../lib/controls';
 import {meleePath} from '../lib/paths.ts';
 import { useEffect, useRef, useState } from "react";
 import { desktop } from "@/lib/desktop";
 import { type Fighter } from "../lib/fighter";
 import { plan, type Settings } from "@/lib/launch";
 import { pollService } from "../lib/service-poll";
-import { nativeBindings } from "@/lib/controls";
+import { nativeBindings, rawGamepads, sampleMeleePad } from "@/lib/controls";
 export default function NativeGame({
   fighter,
   settings,
@@ -30,7 +31,7 @@ export default function NativeGame({
     return () => clearInterval(timer);
   }, [hasFrame, gameReady]);
   useEffect(() => {
-    if (embedded && hasFrame && gameReady && !document.querySelector('dialog[open]')) {
+    if (embedded && hasFrame && gameReady && !gameInputBlocked()) {
       canvas.current?.focus({preventScroll: true});
     }
   }, [embedded, hasFrame, gameReady]);
@@ -42,7 +43,7 @@ export default function NativeGame({
     const failed = (event: Event) => setError((event as CustomEvent<string>).detail);
     const clear = () => bridge.input(null, false);
     const restoreFocus = () => {
-      if (!document.querySelector('dialog[open]')) element.focus({preventScroll: true});
+      if (!gameInputBlocked()) element.focus({preventScroll: true});
     };
     const key = (event: KeyboardEvent) => {
       if (event.code === "F11" || event.code === "Escape") return;
@@ -73,6 +74,7 @@ export default function NativeGame({
     const session = crypto.randomUUID();
     let closed = false,
       stopPolling: (() => void) | undefined;
+    let inputTimer: ReturnType<typeof setInterval> | undefined;
     const controller = new AbortController();
     async function request(url: string, body: unknown) {
       const response = await meleeFetch(url, {
@@ -100,6 +102,21 @@ export default function NativeGame({
         await desktop()!.beginGame(session);
         if (closed) return;
         desktop()!.setGameActive(true);
+        const shared=(window as any).openSmashDesktop;
+        if(shared?.input){
+          const assigned=new Map(rawGamepads().filter(Boolean).map(p=>[p!.index,p!.id]));
+          inputTimer=setInterval(()=>{
+            const pads=rawGamepads(),used=new Set<number>();
+            const blocked=gameInputBlocked();
+            shared.input(session,launch.ports.map((p:any)=>{
+              if(!p.device.startsWith('gamepad'))return [p.device==='keyboard'?2:p.device==='off'?1:0,0,0,0,0,0,0,0,0];
+              const index=Number(p.device.slice(7)),id=assigned.get(index);
+              const pad=pads.find(p=>p?.connected&&!used.has(p.index)&&p.index===index&&p.id===id)||pads.find(p=>p?.connected&&!used.has(p.index)&&p.id===id);
+              if(pad)used.add(pad.index);
+              return sampleMeleePad(blocked?null:pad);
+            }));
+          },16);
+        }
         let prepared = 0;
         const preparationStatus = () => {
           const name = launch.costumes.length === 1
@@ -131,6 +148,7 @@ export default function NativeGame({
           setStatus(s.message);
           setGameReady(Boolean(s.ready));
           if (s.exitCode != null) {
+            clearInterval(inputTimer);
             setError(s.exitCode === 0 ? "Game closed. Return to the roster to start another match." : "Melee stopped unexpectedly. The local native-session.log has details.");
             stopPolling?.();
           }
@@ -139,6 +157,7 @@ export default function NativeGame({
       } catch (e) {
         controller.abort();
         stopPolling?.();
+        clearInterval(inputTimer);
         if (!closed) setError((e as Error).message);
       }
     }
@@ -147,6 +166,8 @@ export default function NativeGame({
       closed = true;
       controller.abort();
       stopPolling?.();
+      clearInterval(inputTimer);
+      (window as any).openSmashDesktop?.input(session,Array.from({length:4},()=>[0,0,0,0,0,0,0,0,0]));
       void meleeFetch("/api/native/stop", {
         method: "POST",
         headers: { "Content-Type": "application/json" },

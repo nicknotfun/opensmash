@@ -68,7 +68,8 @@ def import_source(link,destination,origins,fetch=download):
     return {'name':name,'short':short,'signature':hashlib.sha256(signature.encode()).hexdigest()}
 
 class ImportManager:
-    def __init__(self,catalog,lock,origins=None,workspace=ROOT):
+    def __init__(self,catalog,lock,origins=None,workspace=ROOT,queue_limit=1):
+        self.queue_limit=queue_limit
         self.catalog=catalog;self.lock=lock;self.origins=set(origins or ['https://smash.fun','https://www.smash.fun'])
         self.workspace=Path(workspace);self.root=self.workspace/'build/character-imports';self.root.mkdir(parents=True,exist_ok=True)
         self.index=self.root/'roster.json';self.jobs={};self.pool=ThreadPoolExecutor(max_workers=1);self.state_lock=threading.Lock()
@@ -78,7 +79,7 @@ class ImportManager:
         url=source_url(url,self.origins)
         if target not in TARGETS:raise ValueError('Choose one of the supported Melee targets.')
         with self.state_lock:
-            if any(j['state'] in ['queued','working'] for j in self.jobs.values()):raise ValueError('A character import is already in progress. Wait for it to finish.')
+            if sum(j['state'] in ['queued','working'] for j in self.jobs.values())>=self.queue_limit:raise ValueError('The character conversion queue is full. Try again shortly.')
             token=uuid.uuid4().hex;job={'id':token,'state':'queued','message':'Waiting to import…'};self.jobs[token]=job
         self.pool.submit(self.work,job,url,target);return dict(job)
     def remove(self,slug):

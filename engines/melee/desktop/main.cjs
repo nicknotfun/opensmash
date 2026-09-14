@@ -9,10 +9,12 @@ let window,
   origin,
   launcherOrigin,
   ssb64,
+  launcherInput,
   sharedPopupPolicy,
   saveWindowState,
   quitting = false;
-if(process.env.OPENSMASH_SHARED_LAUNCHER==='1')app.setPath('userData',process.env.OPENSMASH_DESKTOP_DATA||path.join(app.getPath('appData'),'OpenSmash Integration'));
+const sharedLauncher=process.env.OPENSMASH_SHARED_LAUNCHER==='1'||require('./package.json').opensmashSharedLauncher===true;
+if(sharedLauncher)app.setPath('userData',process.env.OPENSMASH_DESKTOP_DATA||path.join(app.getPath('appData'),app.isPackaged?'OpenSmash':'OpenSmash Integration'));
 const token = randomBytes(32).toString("hex");
 const resources = app.isPackaged ? process.resourcesPath : path.resolve(__dirname, "../build");
 const externalHosts = new Set(["github.com", "discord.gg"]);
@@ -30,7 +32,7 @@ async function startBackend() {
     exe,
     [...args, "--desktop", app.getPath("userData"), "--resources", resources],
     {
-      env: { ...process.env, ...surface?.environment, OPENSMASH_DESKTOP_TOKEN: token },
+      env: { ...process.env, ...surface?.environment, OPENSMASH_DESKTOP_TOKEN: token, ...(launcherInput?{OPENSMASH_LAUNCHER_INPUT:launcherInput.file}:{}) },
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
     },
@@ -86,9 +88,13 @@ else
     fs.mkdirSync(app.getPath("userData"), { recursive: true });
     try {
       surface = require("./surface.cjs")(app.getPath("userData"));
+      if(sharedLauncher){
+        const root=app.isPackaged?path.join(resources,'launcher'):path.resolve(__dirname,'../../../desktop');
+        launcherInput=require(path.join(root,'input.cjs')).createInput(app.getPath('userData'));
+      }
       origin = await startBackend();
       launcherOrigin = origin;
-      if (process.env.OPENSMASH_SHARED_LAUNCHER === '1') {
+      if (sharedLauncher) {
         const launcherRoot = app.isPackaged ? path.join(resources,'launcher') : path.resolve(__dirname,'../../../desktop');
         const dist = app.isPackaged ? path.join(resources,'shared-web') : path.resolve(__dirname,'../../../web-prototype/dist');
         if(!fs.existsSync(path.join(dist,'index.html')))throw Error('Build the shared website frontend before starting the unified client.');
@@ -99,7 +105,7 @@ else
         launcherOrigin='https://smash.fun';
         const servicePath=app.isPackaged?path.join(resources,'ssb64-service','service.cjs'):path.resolve(__dirname,'../../ssb64/desktop/service.cjs');
         const {createNativeSsb64}=require(servicePath);
-        ssb64=createNativeSsb64({runtime:process.env.OPENSMASH_SSB64_RUNTIME||path.join(resources,'ssb64'),workspace:path.join(app.getPath('userData'),'ssb64-sessions')});
+        ssb64=createNativeSsb64({inputFile:launcherInput?.file,runtime:process.env.OPENSMASH_SSB64_RUNTIME||path.join(resources,'ssb64'),workspace:path.join(app.getPath('userData'),'ssb64-sessions')});
       }
       session.defaultSession.webRequest.onBeforeSendHeaders(
         { urls: [origin + "/*"] },
@@ -126,8 +132,10 @@ else
           contextIsolation: true,
           sandbox: true,
           nodeIntegration: false,
+          backgroundThrottling: false,
         },
       });
+      if(process.env.OPENSMASH_FORCE_MUTE==='1')window.webContents.setAudioMuted(true);
       saveWindowState = placement.track(window);
       const setFullscreen = require("./fullscreen.cjs")(window);
       const settingsItem = {
@@ -161,6 +169,7 @@ else
         return result;
       }, surface);
       const resetGame = () => {
+        launcherInput?.stop();
         void ssb64?.stop();
         void lifecycle.reset().catch((error) => {
           if (!quitting) dialog.showErrorBox("Could not close the game", error.message);
@@ -197,15 +206,22 @@ else
         )
           throw Error("Invalid desktop caller.");
       }
+      ipcMain.on('opensmash:input',(event,session,ports)=>{
+        try{validateCaller(event);launcherInput?.update(session,ports);}catch{}
+      });
+      ipcMain.on('opensmash:mute',(event,value)=>{
+        try{validateCaller(event);if(typeof value==='boolean')launcherInput?.mute(process.env.OPENSMASH_FORCE_MUTE==='1'||value);}catch{}
+      });
       ipcMain.handle('opensmash:launch',async(event,request)=>{
         validateCaller(event);
         if(!ssb64||request?.engine!=='ssb64')throw Error('Unsupported native engine.');
         await lifecycle.reset();
+        launcherInput?.begin(request.session);
         return ssb64.launch(request);
       });
       ipcMain.handle('opensmash:stop',async(event,request)=>{
         validateCaller(event);
-        if(request?.engine==='ssb64')return ssb64?.stop(request.session);
+        if(request?.engine==='ssb64'){launcherInput?.stop(request.session);return ssb64?.stop(request.session);}
         throw Error('Unsupported native engine.');
       });
       ipcMain.handle('opensmash:status',(event,engine)=>{
@@ -217,7 +233,9 @@ else
       ipcMain.handle("melee:begin-game", async (event, session) => {
         validateCaller(event);
         await ssb64?.stop();
-        return lifecycle.begin(session);
+        const result=await lifecycle.begin(session);
+        launcherInput?.begin(session);
+        return result;
       });
       ipcMain.on("melee:surface-ready", (event, ready) => {
         validateCaller(event);
@@ -319,6 +337,7 @@ app.on("before-quit", (event) => {
     .finally(() => {
       backend?.kill();
       surface?.close();
+      launcherInput?.close();
       app.exit();
     });
 });

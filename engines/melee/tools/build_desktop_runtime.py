@@ -35,7 +35,7 @@ def build(inputs, out):
         "keyboard-no-beep.patch", "zz-electron-embedded.patch", "windows-sdk-compat.patch",
         "zz-graceful-stop.patch",
         "zz-performance.patch", "zz-windows-jit.patch", "zz-startup.patch", "zzz-jit-memory.patch", "zz-startup-cancel.patch",
-        "zzzz-mod-boundaries.patch", "zz-embedded-background-input.patch"
+        "zzzz-mod-boundaries.patch", "zz-embedded-background-input.patch", "zzzzz-launcher-input.patch"
     ]])
     host = ROOT / "build/desktop-runtime-host"
     module = ROOT / "build/desktop-runtime-module"
@@ -282,6 +282,7 @@ def build(inputs, out):
                 "gracefulShutdown": "file-v1",
                 "characterSelect": 1,
                 "keyboardKeys": 2,
+                "launcherInput": 1,
                 "platform": sys.platform,
                 "architecture": platform.machine(),
                 "embeddedSurfaces": ["rgba-memory-v1"] + (["iosurface-v1"] if sys.platform == "darwin" else []),

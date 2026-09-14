@@ -22,7 +22,9 @@ export const actions=[
 export type Action=(typeof actions)[number]['id'];
 export type ButtonAction='a'|'b'|'x'|'y'|'z'|'l'|'r'|'start';
 export const buttonActions:ButtonAction[]=['a','b','x','y','z','l','r','start'];
-export type Bindings={keyboard:Record<Action,string>;gamepad:Record<ButtonAction,number>;profiles?:Record<string,Record<ButtonAction,number>>};
+export type StickAxes={x:number;y:number;cx:number;cy:number;invertX:boolean;invertY:boolean;invertCX:boolean;invertCY:boolean;deadzone:number};
+export const defaultAxes:StickAxes={x:0,y:1,cx:2,cy:3,invertX:false,invertY:false,invertCX:false,invertCY:false,deadzone:.15};
+export type Bindings={axes?:StickAxes;axisProfiles?:Record<string,StickAxes>;keyboard:Record<Action,string>;gamepad:Record<ButtonAction,number>;profiles?:Record<string,Record<ButtonAction,number>>};
 
 // Physical DOM key codes: the right-hand cluster stays under the fingers on every layout.
 export const defaultKeyboard:Record<Action,string>={
@@ -52,6 +54,8 @@ export function loadBindings():Bindings {
   const saved=JSON.parse(preferences.getItem(STORAGE)||'{}');
   for(const action of actions){const code=saved?.keyboard?.[action.id];if(typeof code==='string'&&bindableKeys.has(code))b.keyboard[action.id]=code;}
   for(const action of buttonActions){const index=saved?.gamepad?.[action];if(Number.isInteger(index)&&index>=0&&index<maxGamepadButton)b.gamepad[action]=index;}
+  b.axes=validAxes(saved.axes);
+  if(saved.axisProfiles&&typeof saved.axisProfiles==='object'&&!Array.isArray(saved.axisProfiles))b.axisProfiles=Object.fromEntries(Object.entries(saved.axisProfiles).slice(0,64).filter(([id])=>id.length<=1024).map(([id,value])=>[id,validAxes(value)]));
   if(saved.profiles&&typeof saved.profiles==='object'&&!Array.isArray(saved.profiles)){
    b.profiles=Object.fromEntries(Object.entries(saved.profiles).slice(0,64).filter(([id])=>id.length<=1024).map(([id,mapping])=>[id,validGamepad(mapping,b.gamepad)]));
   }
@@ -93,8 +97,8 @@ export function rebindButton(b:Bindings,action:ButtonAction,index:number,id?:str
  return id?{...b,profiles:{...b.profiles,[id]:gamepad}}:{...b,gamepad};
 }
 export function resetGamepad(b:Bindings,id?:string):Bindings{
- if(!id)return {...b,gamepad:{...defaultGamepad}};
- const profiles={...b.profiles};delete profiles[id];return {...b,profiles};
+ if(!id)return {...b,gamepad:{...defaultGamepad},axes:{...defaultAxes}};
+ const profiles={...b.profiles},axisProfiles={...b.axisProfiles};delete profiles[id];delete axisProfiles[id];return {...b,profiles,axisProfiles};
 }
 // Freeze each connected device's mapping for the native launch request, while
 // keeping the saved profiles independent of volatile browser slot numbers.
@@ -137,14 +141,14 @@ export function connectedGamepads():Gamepad[] {
 }
 export const stickThreshold=0.5;
 // Which actions a gamepad currently holds, for the Controls screen's live highlight.
-export function padActions(pad:Gamepad,gamepad:Record<ButtonAction,number>):Set<Action> {
+export function padActions(pad:Gamepad,gamepad:Record<ButtonAction,number>,axes:StickAxes=defaultAxes):Set<Action> {
  const active=new Set<Action>();
  for(const action of buttonActions){const b=pad.buttons[gamepad[action]];if(b&&(b.pressed||b.value>0.5))active.add(action);}
- const axis=(n:number)=>pad.axes[n]||0;
- if(axis(1)<-stickThreshold)active.add('up');if(axis(1)>stickThreshold)active.add('down');
- if(axis(0)<-stickThreshold)active.add('left');if(axis(0)>stickThreshold)active.add('right');
- if(axis(3)<-stickThreshold)active.add('cup');if(axis(3)>stickThreshold)active.add('cdown');
- if(axis(2)<-stickThreshold)active.add('cleft');if(axis(2)>stickThreshold)active.add('cright');
+ const axis=(n:number,invert:boolean)=>((pad.axes[n]||0)*(invert?-1:1));
+ if(axis(axes.y,axes.invertY)<-stickThreshold)active.add('up');if(axis(axes.y,axes.invertY)>stickThreshold)active.add('down');
+ if(axis(axes.x,axes.invertX)<-stickThreshold)active.add('left');if(axis(axes.x,axes.invertX)>stickThreshold)active.add('right');
+ if(axis(axes.cy,axes.invertCY)<-stickThreshold)active.add('cup');if(axis(axes.cy,axes.invertCY)>stickThreshold)active.add('cdown');
+ if(axis(axes.cx,axes.invertCX)<-stickThreshold)active.add('cleft');if(axis(axes.cx,axes.invertCX)>stickThreshold)active.add('cright');
  return active;
 }
 // Normalise a keyboard event to a physical code, including browsers that only report the key.
@@ -154,3 +158,25 @@ export function eventCode(e:KeyboardEvent):string {
  if(/^[0-9]$/.test(e.key))return 'Digit'+e.key;
  return e.key===' '?'Space':e.key;
 }
+
+export function sampleMeleePad(pad:Gamepad|null|undefined, b=loadBindings()):number[]{
+ if(!pad?.connected)return [3,0,0,0,0,0,0,0,0];
+ const map=gamepadBindings(b,pad.id),bits:Record<ButtonAction,number>={a:0x100,b:0x200,x:0x400,y:0x800,z:0x10,l:0x40,r:0x20,start:0x1000};
+ let buttons=0;for(const action of buttonActions)if(pad.buttons[map[action]]?.pressed)buttons|=bits[action];
+ [8,4,1,2].forEach((bit,i)=>{if(pad.buttons[12+i]?.pressed)buttons|=bit;});
+ const axes=gamepadAxes(b,pad.id);
+ const axis=(i:number,sign=1,invert=false)=>Math.round((Math.abs(pad.axes[i]||0)>axes.deadzone?Math.max(-1,Math.min(1,pad.axes[i])):0)*100*sign*(invert?-1:1))||0;
+ return [3,1,buttons,axis(axes.x,1,axes.invertX),axis(axes.y,-1,axes.invertY),axis(axes.cx,1,axes.invertCX),axis(axes.cy,-1,axes.invertCY),Math.round((pad.buttons[map.l]?.value||0)*255),Math.round((pad.buttons[map.r]?.value||0)*255)];
+}
+
+export function gameInputBlocked(){return [...document.querySelectorAll('dialog[open], [role="dialog"][aria-modal="true"]')].some(element=>element.getClientRects().length>0);}
+
+function validAxes(value:any):StickAxes{
+ const result={...defaultAxes};
+ for(const key of ['x','y','cx','cy'] as const)if(Number.isInteger(value?.[key])&&value[key]>=0&&value[key]<16)result[key]=value[key];
+ for(const key of ['invertX','invertY','invertCX','invertCY'] as const)if(typeof value?.[key]==='boolean')result[key]=value[key];
+ if(Number.isFinite(value?.deadzone)&&value.deadzone>=0&&value.deadzone<=.95)result.deadzone=value.deadzone;
+ return result;
+}
+export function gamepadAxes(b:Bindings,id?:string):StickAxes{return validAxes(id&&Object.hasOwn(b.axisProfiles||{},id)?b.axisProfiles![id]:b.axes);}
+export function rebindAxes(b:Bindings,value:StickAxes,id?:string):Bindings{return id?{...b,axisProfiles:{...b.axisProfiles,[id]:validAxes(value)}}:{...b,axes:validAxes(value)};}

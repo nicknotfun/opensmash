@@ -806,7 +806,7 @@ async function handleRequest(req, res, vite) {
     res.setHeader('Cross-Origin-Opener-Policy','same-origin');
     res.setHeader('Cross-Origin-Embedder-Policy','require-corp');
   }
-  if(handleMelee(req,res))return;
+
   // Firebase's hosted sign-in helper, served from our origin (see auth.js).
   // It carries no cookies either way and is never edge-cached.
   if (isAuthHandlerPath(pathname)) {
@@ -815,7 +815,7 @@ async function handleRequest(req, res, vite) {
   }
   const romSession = readSession(req);
   let user = await authService.readUser(req, {
-    checkRevoked: ["POST", "PATCH", "DELETE"].includes(req.method) && pathname.startsWith("/api/fighters"),
+    checkRevoked: ["POST", "PATCH", "DELETE"].includes(req.method) && (pathname.startsWith("/api/fighters") || pathname.startsWith("/api/melee/source/") || pathname.startsWith("/melee/api/")),
   });
   if (!authService.enabled && romSession) {
     user = {
@@ -825,6 +825,9 @@ async function handleRequest(req, res, vite) {
       provider: "local",
     };
   }
+
+  if(pathname.startsWith('/melee/')&&['POST','PATCH','DELETE'].includes(req.method)&&!mutationOriginAllowed(req))return json(res,403,{error:'Request origin is not allowed'});
+  if(handleMelee(req,res,{user}))return;
 
   if (
     req.method === "GET" &&
@@ -1034,6 +1037,12 @@ async function handleRequest(req, res, vite) {
     } catch (error) {
       return json(res, error.status || 400, { error: error.message || "Could not save fighter settings." });
     }
+  }
+
+  const meleeSourceMatch=pathname.match(/^\/api\/melee\/source\/([a-zA-Z0-9_-]{1,63})$/);
+  if(req.method==='POST'&&meleeSourceMatch){
+    try{return json(res,200,await fighterJobs.exportPlayableSource(meleeSourceMatch[1],user?.uid));}
+    catch(error){return json(res,error.status||400,{error:error.message||'Could not prepare this fighter for Melee.'});}
   }
 
   const sourceExportMatch=pathname.match(/^\/api\/fighters\/([a-f0-9-]+)\/export-source$/);

@@ -24,3 +24,29 @@ test('namespaced proxy preserves binary streams and strips website credentials',
  assert.equal((await fetch(origin+'/engine/module.wasm')).status,404);
  assert.equal((await fetch(origin+'/melee/api/prepare/a',{method:'POST',headers:{Origin:'https://other.example'}})).status,403);
 });
+
+test('hosted gateway exposes only asset and conversion routes',async()=>{
+ const {allowedHostedRoute,createMeleeHandler}=await import('../server/handler.mjs');
+ for(const route of ['/api/game','/api/game/sys/main.dol','/api/setup','/api/setup/clear','/api/native/launch','/api/debug'])for(const method of ['GET','POST'])assert.equal(allowedHostedRoute(method,route),false,route);
+ assert.equal(allowedHostedRoute('POST','/api/prepare/mario'),true);
+ assert.equal(allowedHostedRoute('GET','/engine/opensmash-web.wasm'),true);
+ assert.throws(()=>createMeleeHandler({serviceOrigin:'https://private.example',serviceToken:'short'}));
+});
+
+test('hosted gateway signs guest identities and replaces client-supplied service credentials',async t=>{
+ const received=[];
+ const upstream=http.createServer((req,res)=>{received.push(req.headers);res.end('{}');});
+ upstream.listen(0,'127.0.0.1');await once(upstream,'listening');t.after(()=>upstream.close());
+ const secret='private-gateway-token-'.repeat(3);
+ const handler=createMeleeHandler({serviceOrigin:`http://127.0.0.1:${upstream.address().port}`,serviceToken:secret,production:false});
+ const server=http.createServer((req,res)=>handler(req,res));server.listen(0,'127.0.0.1');await once(server,'listening');t.after(()=>server.close());
+ const origin=`http://127.0.0.1:${server.address().port}`;
+ const first=await fetch(origin+'/melee/api/imports',{headers:{'X-OpenSmash-Owner':'forged','X-OpenSmash-Token':'forged',authorization:'Bearer private'}});
+ const cookie=first.headers.get('set-cookie').split(';')[0];await first.text();
+ const second=await fetch(origin+'/melee/api/imports',{headers:{cookie}});await second.text();
+ assert.equal(received[0]['x-opensmash-token'],secret);
+ assert.equal(received[0].authorization,undefined);assert.equal(received[0].cookie,undefined);
+ assert.match(received[0]['x-opensmash-owner'],/^[a-f0-9]{64}$/);
+ assert.equal(received[0]['x-opensmash-owner'],received[1]['x-opensmash-owner']);
+ assert.equal((await fetch(origin+'/melee/api/native/status')).status,404);assert.equal(received.length,2);
+});
