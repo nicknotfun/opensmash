@@ -1,27 +1,32 @@
 # Deploy OpenSmash on GCP and Cloudflare
 
 The public site is `https://smash.not.fun`. A Cloudflare Worker proxies the
-website to Cloud Run. Dedicated GCP VMs run the WebTransport relay and the
-private Melee conversion service. Use a new, billing-enabled GCP project.
+website to Cloud Run, which serves the website/API and static browser runtimes.
+A dedicated GCP VM runs the WebTransport room/signaling relay. Melee runs in the
+primary player's browser using a local ISO; guests play through WebRTC video,
+audio, and controller input. Use a new, billing-enabled GCP project.
 
 | Component | Address | Deployment |
 | --- | --- | --- |
 | Website and API | `smash.not.fun` | Cloud Run through Cloudflare Worker |
 | Multiplayer relay | `relay.smash.not.fun` | Compute Engine, direct TCP/UDP 443 |
-| Melee service | `melee-service.smash.not.fun` | Compute Engine, HTTPS, private service token |
+| Browser Melee runtime | `smash.not.fun/melee/browser-runtime/` | Verified generic emulator files served by Cloud Run |
+| Optional WebRTC relay | TURN provider endpoints | Encrypted fallback when browsers cannot connect directly |
+| Retained legacy Melee service | `melee-service.smash.not.fun` | Existing unused conversion VM; not needed for browser hosting |
 | Public fighter assets | GCS public bucket | Pinned, content-addressed roster objects |
 | Private jobs and assets | Firestore and private GCS bucket | API/service-account access |
 | Sign-in and bot checks | Firebase Authentication and Turnstile | Own project and domain |
 
-The deployment tools provision infrastructure; they do not provide game ROMs.
-The deployment operator builds and hosts the browser runtimes. Smash 64 can be
-built without a ROM; each player selects their own ROM for local browser
-extraction. Melee currently compiles its game executable from an ISO during the
-one-time engine build. Its private conversion workspace is also generated from
-that ISO and is needed for custom fighter preparation. The operator handles
-these generated artifacts; players do not assemble workspaces or compile code.
-The Melee service returns 503 until provisioned. Real multiplayer gameplay must
-be validated with the matching game files.
+Both browser runtimes can be built and hosted without game files. Each Smash64
+player selects their own ROM. Only the Melee host selects an ISO; its bytes stay
+on that device, and guests need no ISO or emulator. No server-side Melee workspace
+or game-derived executable is required for the browser-hosted route.
+
+The generic Melee module, JIT, four-controller bridge, and actual browser worker
+have passed disc-free checks. Live rollout status is recorded in [LIVE.md](LIVE.md).
+Actual Melee gameplay, audio/rendering, guest latency, and TURN connectivity still
+need qualification. The preview uses the original Melee roster. The old Melee
+conversion VM remains separate and retained pending browser gameplay validation.
 
 See [the network architecture diagrams](ARCHITECTURE.md) for traffic paths and
 [the deployed resource inventory](LIVE.md) for the current project and prerequisites.
@@ -62,15 +67,17 @@ redirect URLs are configured; advertise only working providers in the website.
 
 ## 2. Provision the multiplayer services and domain
 
-Follow [GCP multiplayer services](gcp/README.md) to build digest-pinned images,
-prepare static addresses and a persistent Melee disk, and render the VM startup
-scripts. Create a random `opensmash-melee-token` in Secret Manager and use the
-same secret for the website and Melee service.
+Follow [GCP multiplayer services](gcp/README.md) to build a digest-pinned relay
+image, prepare its static address, and render the VM startup script. Omit the
+optional `--melee-image`: browser hosting requires neither that VM's data disk
+nor its service token. Deploy a relay version supporting `mode:"host-stream"`.
 
 Use the [Cloudflare provisioner](cloudflare/README.md) to create a Turnstile
-widget for `smash.not.fun` and DNS-only A records for the two service addresses.
-Then launch the VMs. DNS must point to the direct VM addresses before certificate
+widget for `smash.not.fun` and a DNS-only A record for `relay.smash.not.fun`.
+Then launch the relay. DNS must point to its direct VM address before certificate
 issuance. The deployer refuses conflicting DNS or incompatible existing resources.
+Existing legacy Melee resources are retained; changing the browser route does
+not automatically remove them.
 
 The relay can be brought up before the game builds and data are available.
 Existing rooms live in one relay process and end on a relay restart.
@@ -78,9 +85,11 @@ Existing rooms live in one relay process and end on a relay restart.
 ## 3. Deploy the website and storage
 
 Create a private deployment JSON file following
-[the website configuration guide](../web-prototype/infra/pilot-site.md).
-Use `mode: "full"`, the Firebase output from step 1, both service origins, and
-separate public/private bucket names. Set `firebase.authDomain` to `smash.not.fun`.
+[the browser-runtime deployment guide](gcp/README.md#3-package-both-browser-runtimes-in-the-website).
+Use `mode: "full"`, the Firebase output from step 1, `relayOrigin`, and separate
+public/private bucket names. Set `firebase.authDomain` to `smash.not.fun`.
+Omit `meleeServiceOrigin` and `meleeServiceToken` for browser-only hosting;
+those fields are optional as a pair for the separate legacy conversion path.
 
 Create `opensmash-cookie-secret` and `opensmash-turnstile-secret` in Secret Manager.
 The cookie secret should be at least 32 random bytes; the Turnstile secret comes
@@ -98,10 +107,38 @@ uses Cloud Build, provisions owned GCS/Firestore resources, scopes the API's IAM
 access, and deploys Cloud Run with public ingress for the Worker. Configuration
 and secret values are excluded from the image build context.
 
-Supply `--ssb64-runtime /path/to/patched/web-dist` when the verified runtime is
-available. Without that option, the website/API can run but Smash 64 gameplay
-has no engine image. The runtime is checked before any cloud operation and must
-contain the compiled netplay export and extraction tools, without ROM archives.
+Include the verified engine packages when they are available:
+
+```sh
+python3 deploy/gcp/site.py \
+  --project YOUR_NEW_PROJECT_ID --region us-central1 \
+  --config /private/path/deployment.json \
+  --ssb64-runtime /path/to/ssb64-web-dist \
+  --melee-browser-runtime /path/to/melee-browser-dist
+```
+
+Pass **both runtime options** to retain both engines in the next image; runtimes
+are not inherited from the previous deployment. Without an engine's option, the
+website/API can run but that engine is unavailable. Preflight rejects game
+archives and symlinks. The Melee manifest, every packaged hash, build record, and
+actual four-port Wasm capability are checked before upload and inside the build.
+Its source archive and license are served alongside the generic runtime.
+
+### Optional Cloudflare TURN
+
+Some networks need TURN to connect the host and guests. Configure the paired
+`cloudflareTurnKeyId` and `cloudflareTurnSecret` fields after creating a Cloudflare
+TURN key. The first is its public 32-hex ID; the second is a numbered Secret
+Manager reference, such as `opensmash-turn:1`, holding its TURN API token.
+The website verifies a connected room capability before returning temporary ICE
+credentials. DNS-edit authorization does not grant TURN API access.
+
+Without TURN, the browsers use STUN and attempt a direct connection. Follow the
+[GCP TURN setup](gcp/README.md#optional-cloudflare-turn) and test a relayed route
+before claiming support across restrictive networks. Keep all API token values
+out of configuration JSON, git, command arguments, and browser bundles.
+
+### Publish the website hostname
 
 Set `CLOUD_RUN_ORIGIN` to the returned service URL in
 [wrangler.jsonc](cloudflare/wrangler.jsonc), then deploy:
@@ -140,7 +177,11 @@ roster objects and never deletes destination objects. Follow the engine-specific
 build and setup instructions:
 
 - [Smash 64 netplay build](../engines/ssb64/netplay/README.md).
-- [Melee private service](../engines/melee/server/README.md).
+- [Generic browser Melee build](../engines/melee/runtime/browser-dolphin/README.md).
+
+The mirrored custom-fighter assets remain available for existing asset flows.
+Browser-hosted Melee initially uses its original ISO roster; it does not depend
+on the legacy custom-fighter conversion service.
 
 An OpenAI key is unnecessary for playing the existing roster. The current fighter
 creation pipeline additionally requires its Tripo and fal/MiniMax configuration,
@@ -155,14 +196,28 @@ node --test deploy/cloudflare/*.test.mjs deploy/gcp/*.test.mjs \
 python3 -m unittest discover -s deploy/gcp -p '*_test.py'
 curl --fail https://relay.smash.not.fun/healthz
 curl --fail https://smash.not.fun/api/netplay/config
+curl --fail https://smash.not.fun/api/melee/browser
 ```
 
-Check sign-in, cookie handling, COOP/COEP isolation, roster images and service
-errors through the actual public hostname. Then run multiple Chromium browsers
-against a shared game link and verified matching game assets. HTTPS health alone
-does not validate UDP/WebTransport reachability or deterministic gameplay.
+Check sign-in, cookie handling, COOP/COEP isolation, runtime availability, and
+roster images through the actual public hostname. The browser streaming harness
+uses separate Chromium processes and real WebTransport/WebRTC; with Playwright
+installed it can exercise the deployed room, relay, ICE, video/audio, and input
+paths without any game data:
 
-The checked-in configuration tests use mocked providers and local HTTP servers.
-Cloud Build, provider permissions, certificate issuance and actual engine gameplay
-still need live deployment validation. Before storing unique user creations,
-configure backups for the persistent Melee workspace and the durable stores.
+```sh
+OPENSMASH_SITE_ORIGIN=https://smash.not.fun node netplay/tests/host-stream-smoke.mjs
+```
+
+Generated media and successful worker startup do not validate a Melee match.
+Complete a real match using only the host's local ISO, verify guest controls and
+unplug/rejoin behavior, and measure game speed and input-to-video latency. Test
+TURN on a route requiring relay as well as direct WebRTC. Smash64 remains
+lockstep and requires matching local ROMs on every participating device.
+
+HTTPS health alone does not establish UDP reachability, gameplay, or deterministic
+simulation. Provider permissions and certificates need live checks; tests cover
+both mocked-provider failure paths and actual local QUIC/media/controller
+exchange. Before enabling unique user creations, configure backups for the
+stores those creation services use. Legacy Melee VM retirement is a separate
+operation after browser gameplay qualification.

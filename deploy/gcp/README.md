@@ -6,10 +6,14 @@ entirely in the primary player's browser: the host supplies a local ISO, guests
 receive video/audio and send inputs, and GCP handles rooms and WebRTC signaling.
 Neither the website nor relay needs a server-side ISO or Melee workspace.
 
-**Status, 2026-09-15:** the generic four-controller Melee runtime has been built
-and exercised in Node and an actual Chromium worker. Live preview rollout is
-pending; actual Melee gameplay and latency remain unqualified. The existing
-legacy Melee VM is retained but unused by this browser path. See
+**Status, 2026-09-15:** browser-hosted Melee preview is live on Cloud Run revision
+`opensmash-site-00005-tml`. The generic four-controller module and actual Chromium
+worker loaded from the public website passed disc-free shared-memory checks;
+four live browsers passed signaling, media,
+controller, and guest-rejoin tests. Actual Melee gameplay and latency remain
+unqualified without a host's local ISO. TURN credentials are pending; current
+connections use STUN only. The legacy VM is retained and unused, and its service
+origin/token have been removed from the website configuration. See
 [network diagrams](../ARCHITECTURE.md), [live inventory](../LIVE.md), and
 [browser runtime build instructions](../../engines/melee/runtime/browser-dolphin/README.md).
 

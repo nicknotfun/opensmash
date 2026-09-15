@@ -5,10 +5,13 @@ region **`us-central1`**, VM zone **`us-central1-a`**. See [LIVE.md](LIVE.md)
 for deployed revisions, verification results, resource sizes, and costs.
 
 The website, public roster, WebTransport relay, and Smash64 runtime are deployed.
-The browser-hosted Melee implementation and generic four-controller runtime have
-been built and tested, including an actual Chromium worker. **Its live preview
-rollout is pending at this documentation update.** Actual Melee gameplay and
-latency still require validation with a player's local ISO. See
+**Browser-hosted Melee preview is live** on Cloud Run revision
+`opensmash-site-00005-tml` with its generic four-controller runtime. The module
+and an actual Chromium worker loaded from the public website passed disc-free
+shared-memory checks; four live browsers also
+passed media, controller, signaling, and guest-rejoin checks. Actual Melee
+gameplay and latency still require validation with a player's local ISO. TURN
+credentials are pending; the deployed ICE provider currently uses STUN only. See
 [Melee hosting](MELEE_HOSTING.md) for the implementation and qualification plan.
 
 ## 1. Website, gameplay, and assets
@@ -27,8 +30,8 @@ WebRTC uses a direct browser connection when possible and optional TURN when a
 direct connection cannot be established. TURN forwards encrypted traffic.
 
 Solid arrows are normal request/data paths. Dashed arrows are local file access
-or optional connections. The Melee paths below describe the implemented preview;
-check [LIVE.md](LIVE.md) for whether its rollout has completed.
+or optional connections. The Melee paths describe the live preview. TURN remains
+optional and unconfigured; check [LIVE.md](LIVE.md) for current qualification.
 
 ```mermaid
 flowchart TD
@@ -189,7 +192,8 @@ flowchart LR
     registry[("Artifact Registry<br/>opensmash and opensmash-site")]
     run["Cloud Run website<br/>Smash64 plus generic Melee payload"]
     vms["Relay and retained legacy Melee VMs"]
-    secrets["Secret Manager<br/>Cookie, Turnstile, optional TURN<br/>Legacy Melee service token"]
+    secrets["Secret Manager<br/>Cookie, Turnstile, optional TURN"]
+    legacysecret["Retained legacy Melee token<br/>Not injected into the website"]
     cf["Cloudflare API<br/>Worker, DNS, Turnstile"]
     iap["Google IAP and OS Login"]
     acme["Let's Encrypt"]
@@ -201,7 +205,7 @@ flowchart LR
     registry -->|IAM-authorized image pull| run
     registry -->|IAM-authorized image pull| vms
     secrets -->|Runtime secret injection| run
-    secrets -.->|Legacy Melee token only| vms
+    legacysecret -.->|Legacy Melee VM only| vms
     devy -->|HTTPS: deployment APIs| cf
     devy -->|Authenticated tunnel| iap
     iap -->|SSH TCP 22| vms
@@ -211,8 +215,7 @@ flowchart LR
 
 Cloud Build has a separate build service account; the website and VMs have
 separate runtime identities. VM startup uses metadata-service credentials for
-image pulls and, on the legacy Melee VM, Secret Manager. The relay does not
-receive that token. Cloud services log to Cloud Logging; VM services use systemd
+image pulls and, on the legacy Melee VM, Secret Manager. Neither the relay nor the current website revision receives that legacy token. Cloud services log to Cloud Logging; VM services use systemd
 and bounded Docker logs. Player tokens must never appear in request logs.
 
 For a website image containing both runtimes, pass **both** `--ssb64-runtime`
@@ -224,7 +227,8 @@ copy it from the previously deployed image. See [GCP deployment](gcp/README.md).
 
 `opensmash-melee` and its 100 GiB data disk already exist. This service belongs
 to the earlier game-derived browser build and custom-fighter conversion path.
-It is **not a dependency of `/melee` browser hosting**. Its missing private
+It is **not a dependency of `/melee` browser hosting**. The deployed website
+configuration omits its service origin and token. Its missing private
 workspace must not be filled to enable the new route. The existing endpoint
 remains unconfigured; retirement is pending actual browser gameplay qualification.
 No VM, disk, or address has been removed by the browser-hosting changes.
