@@ -36,11 +36,12 @@ jobs:
   relay:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    env:
-      GOMODCACHE: ${{ runner.temp }}/netplay-go-mod
-      GOCACHE: ${{ runner.temp }}/netplay-go-build
     steps:
       - uses: actions/checkout@v4
+      - name: Configure Go caches
+        run: |
+          echo "GOMODCACHE=$RUNNER_TEMP/netplay-go-mod" >> "$GITHUB_ENV"
+          echo "GOCACHE=$RUNNER_TEMP/netplay-go-build" >> "$GITHUB_ENV"
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26.0'
