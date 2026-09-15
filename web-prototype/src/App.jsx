@@ -1,4 +1,7 @@
 import {loadSettings as loadMeleeSettings} from '../../engines/melee/web/lib/launch';
+import {selectLocalDisc,subscribeLocalDisc} from '../../engines/melee/web/lib/melee-session';
+import {desktop as meleeDesktop} from '../../engines/melee/web/lib/desktop';
+import {pollService as pollMeleeService} from '../../engines/melee/web/lib/service-poll';
 import {selectionPorts as meleeSelectionPorts} from '../../engines/melee/launcher/launch-plan.mjs';
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import flowMusicUrl from "../visual/assets/skyward-save.mp3?url";
@@ -341,6 +344,16 @@ const MeleeSettings = lazy(()=>import('../../engines/melee/launcher/Experience.t
 export default function App() {
   const nativeSsb64=Boolean(window.openSmashDesktop?.engines?.ssb64);
   const [isMelee, setIsMelee] = useState(() => /^\/melee(?:\/|$)/.test(window.location.pathname));
+  const [meleeDiscReady,setMeleeDiscReady] = useState(false);
+  useEffect(() => {
+    if (meleeDesktop()) return pollMeleeService('/melee/api/setup',s=>setMeleeDiscReady(s.ready),()=>setMeleeDiscReady(false));
+    return subscribeLocalDisc(s=>setMeleeDiscReady(s.ready));
+  }, []);
+  async function validateMeleeDisc(file) {
+    if (!meleeDesktop()) return selectLocalDisc(file);
+    const result = await meleeDesktop().chooseDisc();
+    if (result.cancelled) throw Error('No disc selected.');
+  }
   function syncExperience() {
     setEngine(null);
     setPendingAction(null);
@@ -1556,6 +1569,8 @@ export default function App() {
       fighterJobs,
       showEngineControls: isMelee ? ()=>setAdvancedOpen(true) : undefined,
       handlesGameSetup: isMelee||nativeSsb64,
+      experience: isMelee ? 'melee' : 'ssb64',
+      nativeDiscPicker: isMelee && Boolean(meleeDesktop()),
       announceCharacter(slug) {
         const character = characters.find((candidate) => candidate.slug === slug);
         if (character) announceCharacter(character);
@@ -1576,7 +1591,7 @@ export default function App() {
         return controllerPlan(advancedOptions, gamepads)
           .filter((entry) => entry?.kind === "keyboard" || entry?.kind === "gamepad").length;
       },
-      isAuthorized() { return authorized; },
+      isAuthorized() { return isMelee ? meleeDiscReady : authorized; },
       launch: launchVisualAction,
       cancelCreateRom() { setCreateStage(null); },
       navigate(pathname) {
@@ -1592,7 +1607,7 @@ export default function App() {
         if (job) setDetailsJobId(job.id);
       },
       validateCreateRom: validateCreateVisualRom,
-      validateRom: validateVisualRom,
+      validateRom: isMelee ? validateMeleeDisc : validateVisualRom,
     });
     window.openSmashReactBridge = visualBridgeRef.current;
 

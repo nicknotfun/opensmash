@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import {createDisc,createGameCube} from '../../engines/melee/launcher/disc-hardware.js';
 import { compileSceneAsync } from '../shared/shader-compilation.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import {
@@ -524,6 +525,9 @@ let flowMotionTargetScale = 1;
 let flowMotionCompletion = null;
 let cartridgePromise = null;
 let consolePromise = null;
+let discPromise = null;
+let gameCubePromise = null;
+const usesDisc = () => APP_BRIDGE?.experience === 'melee' && !createUploadMode;
 let controllerPromise = null;
 let flowPostReady = null;
 let flowRenderTarget = null;
@@ -864,6 +868,8 @@ function fitFlowModelToViewport(model, kind) {
 }
 
 function preloadFlowModels() {
+  discPromise ||= textureLoader.loadAsync(cartridgeLabelUrl).then(createDisc).then(prepareFlowShaders);
+  gameCubePromise ||= Promise.resolve(createGameCube()).then(prepareFlowShaders);
   cartridgePromise ||= Promise.all([
     gltfLoader.loadAsync(cartridgeModelUrl),
     textureLoader.loadAsync(cartridgeLabelUrl),
@@ -1669,7 +1675,7 @@ async function beginConsoleDockTransition(completion) {
 
   let consoleModel;
   try {
-    consoleModel = await consolePromise;
+    consoleModel = await (usesDisc() ? gameCubePromise : consolePromise);
   } catch (error) {
     if (sequence !== flowSequence || requestedModelKind !== 'console-dock' || overlay?.hidden) return;
     console.error('Could not load the console model; using the standard transition.', error);
@@ -1731,6 +1737,13 @@ async function beginConsoleDockTransition(completion) {
   consoleDockModel.position.copy(consoleDockConsoleStartPosition);
   consoleDockModel.quaternion.copy(consoleDockConsoleStartQuaternion);
   consoleDockModel.scale.setScalar(consoleDockConsoleScale);
+
+  if (consoleDockModel.userData.isGameCube) {
+    consoleDockModel.userData.lid.rotation.z = 1.32;
+    // The disc arrives face-on, then lies flat over the top-loading spindle.
+    consoleDockCartridgeTargetQuaternion.multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(0,0,Math.PI/2)));
+    consoleDockCartridgeWindupQuaternion.copy(consoleDockCartridgeTargetQuaternion);
+  }
 
   flowMotionCompletion = completion;
   consoleDockImpactSoundPlayed = false;
@@ -1859,6 +1872,10 @@ function updateConsoleDockTransition(now, reducedMotion) {
   consoleDockAssembly.scale.setScalar(THREE.MathUtils.lerp(1, 0.54, retreat));
 
   const impactAt = slamStartedAt + CONSOLE_SLAM_MS * impactPoint;
+  if (consoleDockModel.userData.isGameCube) {
+    const close = easeOutCubic(THREE.MathUtils.clamp((elapsed-impactAt-80)/350,0,1));
+    consoleDockModel.userData.lid.rotation.z = 1.32*(1-close);
+  }
   if (!consoleDockImpactSoundPlayed && elapsed >= impactAt) {
     consoleDockImpactSoundPlayed = true;
     playLaunchSound(LAUNCH_SOUNDS.cartridgeChunk);
@@ -1960,7 +1977,7 @@ async function showFlowModel(kind, phase = 'enter') {
   const sequence = flowSequence;
   let model;
   try {
-    model = await (kind === 'cartridge' ? cartridgePromise : controllerPromise);
+    model = await (kind === 'cartridge' ? (usesDisc() ? discPromise : cartridgePromise) : controllerPromise);
   } catch (error) {
     if (sequence === flowSequence && requestedModelKind === kind && !overlay?.hidden) {
       APP_BRIDGE?.reportError?.(error);
@@ -2092,6 +2109,11 @@ function resetRomPrompt() {
     formError.textContent = '';
   }
   resetAlternativeSources();
+  if (fileInput) fileInput.accept = usesDisc() ? '.iso,.gcm' : '.z64,.n64,.v64,.rom,.zip,application/octet-stream,application/zip';
+  if (uploadButton && usesDisc()) uploadButton.textContent = 'Choose disc';
+  const hint = document.getElementById('rom-filename-hint');
+  if (hint) hint.hidden = usesDisc();
+  if (moreOptionsButton) moreOptionsButton.hidden = usesDisc();
 }
 
 // --- Alternative ROM sources -------------------------------------------------
@@ -2465,7 +2487,9 @@ function showLaunchFlow(fighter, { create = false } = {}) {
   resetControlCheck();
   if (flowTitle) flowTitle.textContent = create ? 'Create a fighter' : 'Play Smash.fun';
   if (flowCopy) {
-    flowCopy.textContent = create
+    flowCopy.textContent = usesDisc()
+      ? 'Insert your Melee USA 1.02 disc (.iso or .gcm). It stays on your device.'
+      : create
       ? 'To create a fighter, choose your legally obtained USA-release Super Smash Bros. 64 ROM. It never leaves your device.'
       : 'To play, choose your legally obtained USA-release Super Smash Bros. 64 ROM. It never leaves your device.';
   }
@@ -2568,6 +2592,12 @@ function transitionToController() {
   overlay.dataset.step = 'transition';
   beginConsoleDockTransition(() => {
     if (sequence !== flowSequence || overlay.hidden) return;
+    if (usesDisc()) {
+      const fighter = pendingFighter;
+      closeLaunchFlow();
+      launch(fighter);
+      return;
+    }
     overlay.dataset.step = 'controller';
     showFlowModel('controller');
     scheduleControlSkip();
@@ -2623,7 +2653,7 @@ async function validateRom(file) {
       APP_BRIDGE?.completeCreateRom?.();
       createUploadMode = false;
       closeLaunchFlow();
-    } else if (usesMobileControls()) {
+    } else if (usesMobileControls() && !usesDisc()) {
       // Touch devices skip the keyboard tutorial and boot straight away.
       const fighter = pendingFighter;
       completeControlsRoadblock();
@@ -2643,7 +2673,7 @@ async function validateRom(file) {
     }
     if (uploadButton) {
       uploadButton.disabled = false;
-      uploadButton.textContent = 'Choose ROM';
+      uploadButton.textContent = usesDisc() ? 'Choose disc' : 'Choose ROM';
     }
     if (cancelButton) cancelButton.disabled = false;
     if (receivedFromHandoff) {
@@ -2677,6 +2707,11 @@ function continueToGame() {
 }
 
 function requestLaunch(fighter) {
+  if (APP_BRIDGE?.experience === 'melee') {
+    if (!hasVerifiedRom()) showLaunchFlow(fighter);
+    else launch(fighter);
+    return;
+  }
   if (APP_BRIDGE?.handlesGameSetup) { launch(fighter); return; }
   if (!hasVerifiedRom()) {
     showLaunchFlow(fighter);
@@ -2688,7 +2723,10 @@ function requestLaunch(fighter) {
 }
 
 uploadButton?.addEventListener('click', () => {
-  if (!validationBusy) fileInput?.click();
+  if (!validationBusy) {
+    if (usesDisc() && APP_BRIDGE?.nativeDiscPicker) void validateRom({nativeDisc:true});
+    else fileInput?.click();
+  }
 });
 fileInput?.addEventListener('change', () => validateRom(fileInput.files?.[0]));
 cancelButton?.addEventListener('click', () => {
