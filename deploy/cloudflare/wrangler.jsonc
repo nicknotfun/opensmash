@@ -1,0 +1,16 @@
+{
+  "$schema": "https://unpkg.com/wrangler/config-schema.json",
+  "name": "opensmash-site",
+  "main": "worker.mjs",
+  "compatibility_date": "2026-09-15",
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [
+    { "pattern": "smash.not.fun", "custom_domain": true }
+  ],
+  "vars": {
+    "SITE_ORIGIN": "https://smash.not.fun",
+    // Set to the Cloud Run service URL after deploying the website container.
+    "CLOUD_RUN_ORIGIN": ""
+  }
+}

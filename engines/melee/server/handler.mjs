@@ -4,8 +4,13 @@ import {createHash,createHmac,randomBytes,timingSafeEqual} from 'node:crypto';
 
 // The imported server owns local game data and converters. Only development may
 // proxy to it. A public deployment needs a separately authenticated asset service.
-export function createMeleeHandler({origin=process.env.MELEE_LOCAL_ORIGIN,production=process.env.NODE_ENV==='production',serviceOrigin=process.env.MELEE_SERVICE_ORIGIN,serviceToken=process.env.MELEE_SERVICE_TOKEN}={}) {
-  let upstream,hosted=false;
+export function createMeleeHandler({origin=process.env.MELEE_LOCAL_ORIGIN,production=process.env.NODE_ENV==='production',serviceOrigin=process.env.MELEE_SERVICE_ORIGIN,serviceToken=process.env.MELEE_SERVICE_TOKEN,publicOrigin=process.env.PUBLIC_ORIGIN}={}) {
+  let upstream,hosted=false,websiteOrigin;
+  if(publicOrigin){
+    const parsed=new URL(publicOrigin);
+    if((parsed.protocol!=='https:'&&!(parsed.protocol==='http:'&&!production&&['127.0.0.1','localhost','[::1]'].includes(parsed.hostname)))||parsed.username||parsed.password||parsed.pathname!=='/'||parsed.search||parsed.hash)throw Error('PUBLIC_ORIGIN must be an HTTPS website origin (or loopback HTTP in development).');
+    websiteOrigin=parsed.origin;
+  }
   if(serviceOrigin){
     upstream=new URL(serviceOrigin);hosted=true;
     if((upstream.protocol!=='https:'&&!(upstream.protocol==='http:'&&['127.0.0.1','localhost','[::1]'].includes(upstream.hostname)))||upstream.username||upstream.password||upstream.pathname!=='/'||upstream.search||upstream.hash||!serviceToken||serviceToken.length<32)throw Error('Configure a private Melee service origin and a token of at least 32 characters.');
@@ -26,12 +31,16 @@ export function createMeleeHandler({origin=process.env.MELEE_LOCAL_ORIGIN,produc
     }
     if(hosted&&!allowedHostedRoute(req.method,url.pathname.slice('/melee'.length))){res.writeHead(404);res.end();return true;}
     const headers={...req.headers,host:upstream.host};
-    // The browser is talking to this same-origin development server. Never
-    // forward website credentials into the local game service.
+    // Behind Cloudflare, Host is the Cloud Run hostname while Origin names the
+    // public website. Trust its configured origin, not client forwarding headers.
+    // Website credentials stay at this gateway, outside the private game service.
     delete headers.cookie;delete headers.authorization;delete headers['x-opensmash-token'];delete headers['x-opensmash-owner'];
     if(headers.origin){
-      if(headers.origin!==`http://${req.headers.host}` && headers.origin!==`https://${req.headers.host}`){res.writeHead(403);res.end();return true;}
+      const allowed=websiteOrigin?headers.origin===websiteOrigin:headers.origin===`http://${req.headers.host}`||headers.origin===`https://${req.headers.host}`;
+      if(!allowed){res.writeHead(403);res.end();return true;}
       headers.origin=upstream.origin;
+    }else if(production&&!['GET','HEAD','OPTIONS'].includes(req.method)){
+      res.writeHead(403);res.end();return true;
     }
     if(hosted){
       let identity=user?.uid;

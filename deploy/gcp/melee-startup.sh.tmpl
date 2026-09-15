@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
+PROJECT_ID='{{PROJECT_ID}}'
+MELEE_IMAGE='{{MELEE_IMAGE}}'
+MELEE_HOST='{{MELEE_HOST}}'
+SOURCE_ORIGINS='{{SOURCE_ORIGINS}}'
+ACME_EMAIL='{{ACME_EMAIL}}'
+REGISTRY='{{REGISTRY}}'
+TOKEN_SECRET='{{TOKEN_SECRET}}'
+apt-get update -qq
+apt-get install -y --no-install-recommends ca-certificates curl python3 docker.io certbot nginx
+systemctl stop nginx
+systemctl enable --now docker
+# Only the dedicated attached data disk may be initialized. Never touch boot disks.
+disk=/dev/disk/by-id/google-opensmash-melee-data
+for attempt in $(seq 1 30); do test -b "$disk" && break; sleep 1; done
+test -b "$disk"
+if ! blkid "$disk" >/dev/null 2>&1; then
+  test "$(lsblk -n -o TYPE "$disk" | wc -l)" -eq 1
+  test -z "$(wipefs --no-act --noheadings --output TYPE "$disk")"
+  mkfs.ext4 -F -L opensmash-melee "$disk"
+fi
+test "$(blkid -s TYPE -o value "$disk")" = ext4
+install -d -m 0700 /srv/opensmash-melee
+uuid=$(blkid -s UUID -o value "$disk")
+if ! findmnt /srv/opensmash-melee >/dev/null; then mount "UUID=$uuid" /srv/opensmash-melee; fi
+if ! grep -q '^UUID=.* /srv/opensmash-melee ' /etc/fstab; then
+  printf 'UUID=%s /srv/opensmash-melee ext4 defaults,nofail 0 2\n' "$uuid" >> /etc/fstab
+fi
+install -d -m 0700 /srv/opensmash-melee/data /srv/opensmash-melee/inputs/{browser,characters,sys}
+install -d -m 0700 /run/opensmash-docker /etc/opensmash
+export DOCKER_CONFIG=/run/opensmash-docker
+curl --fail --silent --show-error -H 'Metadata-Flavor: Google' \
+  http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])' \
+  | docker login -u oauth2accesstoken --password-stdin "https://${REGISTRY}"
+docker pull "$MELEE_IMAGE"
+rm -rf /run/opensmash-docker
+unset DOCKER_CONFIG
+# Fetch the shared gateway credential directly into a root-only file, never metadata/logs.
+PROJECT_ID="$PROJECT_ID" TOKEN_SECRET="$TOKEN_SECRET" python3 - <<'PY'
+import base64,json,os,urllib.request
+request=urllib.request.Request('http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token',headers={'Metadata-Flavor':'Google'})
+with urllib.request.urlopen(request) as response: token=json.load(response)['access_token']
+url='https://secretmanager.googleapis.com/v1/projects/'+os.environ['PROJECT_ID']+'/secrets/'+os.environ['TOKEN_SECRET']+'/versions/latest:access'
+request=urllib.request.Request(url,headers={'Authorization':'Bearer '+token})
+with urllib.request.urlopen(request) as response: secret=base64.b64decode(json.load(response)['payload']['data']).decode()
+if len(secret)<32 or not secret.isascii() or not all(c.isalnum() or c in '_-+=' for c in secret): raise SystemExit('Melee secret must be a single-line ASCII token of at least 32 characters')
+fd=os.open('/etc/opensmash/melee.env',os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600)
+with os.fdopen(fd,'w') as output: output.write('MELEE_SERVICE_TOKEN='+secret+'\n')
+PY
+cat > /etc/systemd/system/opensmash-melee.service <<UNIT
+[Unit]
+Description=OpenSmash private Melee conversion service
+After=docker.service network-online.target
+Requires=docker.service
+RequiresMountsFor=/srv/opensmash-melee
+ConditionPathExists=/srv/opensmash-melee/data/build/web-game/verified.json
+[Service]
+Restart=on-failure
+RestartSec=10
+ExecStartPre=-/usr/bin/docker rm -f opensmash-melee
+ExecStart=/usr/bin/docker run --name opensmash-melee --rm --cap-drop ALL --security-opt no-new-privileges:true --memory 6g --cpus 2 --pids-limit 256 --log-opt max-size=10m --log-opt max-file=3 -p 127.0.0.1:8782:8782 --env-file /etc/opensmash/melee.env -e MELEE_SOURCE_ORIGINS=${SOURCE_ORIGINS} --mount type=bind,src=/srv/opensmash-melee/data,dst=/data --mount type=bind,src=/srv/opensmash-melee/inputs/browser,dst=/inputs/browser,readonly --mount type=bind,src=/srv/opensmash-melee/inputs/characters,dst=/inputs/characters,readonly --mount type=bind,src=/srv/opensmash-melee/inputs/sys,dst=/inputs/sys,readonly ${MELEE_IMAGE}
+ExecStop=/usr/bin/docker stop --time 15 opensmash-melee
+TimeoutStopSec=30
+[Install]
+WantedBy=multi-user.target
+UNIT
+certbot certonly --standalone --preferred-challenges http --non-interactive --agree-tos \
+  --email "$ACME_EMAIL" --domain "$MELEE_HOST" --keep-until-expiring
+rm -f /etc/nginx/sites-enabled/default
+cat > /etc/nginx/sites-available/opensmash-melee <<NGINX
+server {
+  listen 443 ssl;
+  server_name ${MELEE_HOST};
+  ssl_certificate /etc/letsencrypt/live/${MELEE_HOST}/fullchain.pem;
+  ssl_certificate_key /etc/letsencrypt/live/${MELEE_HOST}/privkey.pem;
+  ssl_protocols TLSv1.2 TLSv1.3;
+  access_log off;
+  server_tokens off;
+  client_max_body_size 16k;
+  location / {
+    proxy_pass http://127.0.0.1:8782;
+    proxy_set_header Host \$host;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_read_timeout 600s;
+    proxy_intercept_errors on;
+    error_page 502 504 =503 @unavailable;
+  }
+  location @unavailable {
+    default_type application/json;
+    add_header Cache-Control no-store always;
+    return 503 '{"error":"Melee game assets are not provisioned"}';
+  }
+}
+NGINX
+ln -sf /etc/nginx/sites-available/opensmash-melee /etc/nginx/sites-enabled/opensmash-melee
+install -d -m 0755 /etc/letsencrypt/renewal-hooks/deploy
+cat > /etc/letsencrypt/renewal-hooks/deploy/opensmash-melee <<'HOOK'
+#!/usr/bin/env bash
+set -euo pipefail
+nginx -t
+systemctl reload nginx
+HOOK
+chmod 0755 /etc/letsencrypt/renewal-hooks/deploy/opensmash-melee
+nginx -t
+systemctl daemon-reload
+systemctl enable --now certbot.timer nginx opensmash-melee

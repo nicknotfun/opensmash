@@ -26,6 +26,10 @@ jobs:
         working-directory: engines/melee/web
       - run: pnpm test && pnpm build
         working-directory: web-prototype
+      - name: Deployment configuration and gateway checks
+        run: |
+          node --test deploy/cloudflare/*.test.mjs deploy/gcp/*.test.mjs web-prototype/infra/pilot-site.test.mjs engines/melee/tests/server.test.mjs
+          python3 -m unittest discover -s deploy/gcp -p "*_test.py"
       - run: npx tsc --noEmit
         working-directory: engines/melee/web
       - run: node --test engines/melee/tests/netplay*.test.mjs engines/melee/tests/presentation.test.mjs engines/melee/tests/launch_options.test.mjs engines/melee/tests/launcher_selection.test.mjs engines/melee/tests/controller_profiles.test.mjs

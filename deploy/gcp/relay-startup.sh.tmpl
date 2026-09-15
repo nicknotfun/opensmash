@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
+RELAY_IMAGE='{{RELAY_IMAGE}}'
+RELAY_HOST='{{RELAY_HOST}}'
+SITE_ORIGIN='{{SITE_ORIGIN}}'
+ACME_EMAIL='{{ACME_EMAIL}}'
+REGISTRY='{{REGISTRY}}'
+apt-get update -qq
+apt-get install -y --no-install-recommends ca-certificates curl python3 docker.io certbot
+systemctl enable --now docker
+install -d -m 0700 /run/opensmash-docker
+export DOCKER_CONFIG=/run/opensmash-docker
+curl --fail --silent --show-error -H 'Metadata-Flavor: Google' \
+  http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])' \
+  | docker login -u oauth2accesstoken --password-stdin "https://${REGISTRY}"
+docker pull "$RELAY_IMAGE"
+rm -rf /run/opensmash-docker
+unset DOCKER_CONFIG
+install -d -m 0755 /srv/opensmash-relay/tls
+cat > /etc/systemd/system/opensmash-relay.service <<UNIT
+[Unit]
+Description=OpenSmash WebTransport relay
+After=docker.service network-online.target
+Requires=docker.service
+[Service]
+Restart=always
+RestartSec=3
+ExecStartPre=-/usr/bin/docker rm -f opensmash-relay
+ExecStart=/usr/bin/docker run --name opensmash-relay --rm --read-only --cap-drop ALL --security-opt no-new-privileges:true --memory 1g --cpus 2 --pids-limit 128 --log-opt max-size=10m --log-opt max-file=3 -p 443:8443/tcp -p 443:8443/udp --mount type=bind,src=/srv/opensmash-relay/tls,dst=/tls,readonly -e RELAY_ADDR=:8443 -e RELAY_TLS_CERT=/tls/fullchain.pem -e RELAY_TLS_KEY=/tls/privkey.pem -e RELAY_ALLOWED_ORIGINS=${SITE_ORIGIN} ${RELAY_IMAGE}
+ExecStop=/usr/bin/docker stop --time 10 opensmash-relay
+TimeoutStopSec=20
+[Install]
+WantedBy=multi-user.target
+UNIT
+install -d -m 0755 /etc/letsencrypt/renewal-hooks/deploy
+cat > /etc/letsencrypt/renewal-hooks/deploy/opensmash-relay <<HOOK
+#!/usr/bin/env bash
+set -euo pipefail
+install -o 65532 -g 65532 -m 0444 /etc/letsencrypt/live/${RELAY_HOST}/fullchain.pem /srv/opensmash-relay/tls/fullchain.pem
+install -o 65532 -g 65532 -m 0400 /etc/letsencrypt/live/${RELAY_HOST}/privkey.pem /srv/opensmash-relay/tls/privkey.pem
+# The current relay loads certificates at startup. Renewal ends active rooms.
+if systemctl is-active --quiet opensmash-relay; then systemctl restart opensmash-relay; fi
+HOOK
+chmod 0755 /etc/letsencrypt/renewal-hooks/deploy/opensmash-relay
+systemctl daemon-reload
+# DNS must already point directly to this VM before launching it.
+certbot certonly --standalone --preferred-challenges http --non-interactive --agree-tos \
+  --email "$ACME_EMAIL" --domain "$RELAY_HOST" --keep-until-expiring
+/etc/letsencrypt/renewal-hooks/deploy/opensmash-relay
+systemctl enable --now certbot.timer opensmash-relay
