@@ -15,11 +15,16 @@ let preparationSamples=[], preparationLastFrame=0, preparationReleased=false, pr
 const costumeSizes=new Map();
 let runtimeBuild, startOptions, activeSelection, readyForSelection = false;
 let online = false, netplayHelpers;
+let presentation, presentationVisible = true;
 const report = (type, data) => {
   postMessage({type, sessionId, ...data});
   if (type !== 'metrics' && type !== 'netplay-needed') fetch(apiPrefix+'/api/debug', {method:'POST', headers:{'Content-Type':'application/json'},body:JSON.stringify({time:Date.now(),type,sessionId,...data})}).catch(()=>{});
 };
 self.onmessage = async ({data}) => {
+  if (data.type === 'frame-received') { presentation?.received(data.id); return; }
+  if (data.type === 'presentation-visible') {
+    presentationVisible = !!data.visible; presentation?.setVisible(presentationVisible); return;
+  }
   if (data.type === 'netplay-frame') {
     try {
       if (!online || !engine) throw Error('Multiplayer has not started.');
@@ -34,7 +39,7 @@ self.onmessage = async ({data}) => {
     }
     return;
   }
-  if (data.type === 'netplay-stop') { engine?._opensmash_netplay_stop?.(); return; }
+  if (data.type === 'netplay-stop') { presentation?.dispose(); engine?._opensmash_netplay_stop?.(); return; }
   if (data.type === 'select') {
     try {
       if (!engine || !readyForSelection) throw Error('The engine is not ready for a selection.');
@@ -99,6 +104,9 @@ self.onmessage = async ({data}) => {
   if (data.type !== 'start' || engine) return;
   try {
     const {sceneReady}=await import('./scene-preparation.mjs');
+    const {createBitmapSender}=await import('./presentation.mjs');
+    presentation = createBitmapSender({visible:presentationVisible,
+      send:({id,bitmap})=>postMessage({type:'frame',id,bitmap},[bitmap])});
     const buildResponse=await fetch('./opensmash-web-build.json');
     if(!buildResponse.ok)throw Error('The local engine build is incomplete. Finish the browser build first.');
     const build=await buildResponse.json();
@@ -124,7 +132,7 @@ self.onmessage = async ({data}) => {
         if(intro===2&&!introReported){introReported=true;report('intro',{});}
         const preparing=activeSelection?.launch?.mode===0 && engine?._opensmash_preparation_state && engine._opensmash_preparation_state()!==4;
         if(combatReached && preparing) {bitmap.close();return;}
-        postMessage({type: "frame", bitmap}, [bitmap]);
+        presentation.offer(bitmap);
         if (combatReached && !startupReported) {
           startupReported = true;firstPlayableAt=performance.now();
           report('playable',{});
@@ -154,11 +162,11 @@ self.onmessage = async ({data}) => {
         if (/Failed to initialize video backend|guest assert|\[browser-stack\]|Aborted\(/.test(text))
           report('error', {message: text});
       },
-      onExit: code => report('error', {message: `The game exited (code ${code}).`}),
-      onAbort: reason => report('error', {message: `Melee stopped: ${reason}`}),
+      onExit: code => { presentation.dispose(); report('error', {message: `The game exited (code ${code}).`}); },
+      onAbort: reason => { presentation.dispose(); report('error', {message: `Melee stopped: ${reason}`}); },
       onVerifyProgress: bytes => report('status', {message: `Checking your game… ${Math.floor(bytes / data.iso.size * 100)}%`}),
     });
-    if (online && (engine._opensmash_netplay_version?.() !== 1 ||
+    if (online && (engine._opensmash_netplay_version?.() !== 2 ||
         engine._opensmash_netplay_enable(data.netplay.seed) !== 1))
       throw Error('This Melee engine needs the multiplayer runtime update.');
     if(!engine._opensmash_preparation_state)preparationReleased=true;
@@ -420,6 +428,7 @@ self.onmessage = async ({data}) => {
       lastFrame = count; lastTime = now;
     }, 1000);
   } catch (error) {
+    presentation?.dispose();
     report('error', {message: `${phase}: ${error.message || String(error)}`, stack: error.stack});
   }
 };

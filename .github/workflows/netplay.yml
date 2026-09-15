@@ -28,7 +28,7 @@ jobs:
         working-directory: web-prototype
       - run: npx tsc --noEmit
         working-directory: engines/melee/web
-      - run: node --test engines/melee/tests/netplay*.test.mjs engines/melee/tests/launch_options.test.mjs engines/melee/tests/launcher_selection.test.mjs engines/melee/tests/controller_profiles.test.mjs
+      - run: node --test engines/melee/tests/netplay*.test.mjs engines/melee/tests/presentation.test.mjs engines/melee/tests/launch_options.test.mjs engines/melee/tests/launcher_selection.test.mjs engines/melee/tests/controller_profiles.test.mjs
       - run: |
           g++ -std=c++20 -pthread -Wall -Wextra -Werror engines/melee/tests/netplay_gate.cpp -o /tmp/melee-netplay-gate
           /tmp/melee-netplay-gate

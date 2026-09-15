@@ -58,6 +58,31 @@ alone does not prove complete engine determinism. Cross-browser gameplay,
 CPU/GPU performance and long-running matches remain release checks. Fingerprints
 are compatibility checks, not anti-cheat attestation.
 
+### Simulation ticks and display refreshes
+
+A protocol `frame` means one **emulated simulation tick**, not a browser redraw.
+Input confirmation gates that tick; it does not wait for `requestAnimationFrame`
+or a canvas presentation acknowledgment. Display refreshes cannot consume an
+input twice, skip a simulation tick, or let the game advance without every
+player's input.
+
+- **Smash 64:** the online loop waits asynchronously for confirmed inputs and a
+  fixed 60 Hz timer deadline before entering the synchronous game tick. Online
+  pacing bypasses the original browser animation-frame wait. Catch-up is bounded
+  after a stall without dropping game ticks. The browser compositor displays the
+  latest completed canvas image independently.
+- **Melee:** the emulated CPU waits at the console's video-interface boundary;
+  its clock already runs independently of browser animation callbacks. Completed
+  images pass through bounded mailboxes to a separate animation-frame presenter.
+  Slow or absent presentation drops stale images instead of blocking the CPU or
+  accumulating images. Presentation credits control image transfers only.
+
+This separates input/simulation scheduling from **display presentation**. Both
+engines still execute guest graphics work that reads live game memory and can
+affect emulated timing. Moving that work onto an independent renderer requires
+captured graphics state and further engine validation. GPU cost can still limit
+simulation speed, and browser background throttling can still slow a player.
+
 ### Code map
 
 - `netplay/relay/`: TLS/HTTP3 server, room lifecycle, authenticated input barrier,
@@ -70,6 +95,8 @@ are compatibility checks, not anti-cheat attestation.
   build driver. `web-prototype/public/ssb64-netplay.js` connects the iframe.
 - `engines/melee/runtime/web/netplay*` and browser patch `0007`: Melee frame gate,
   startup fingerprint and worker/controller protocol.
+- `engines/melee/runtime/web/presentation.mjs`: bounded image transfer and an
+  independent presenter that keeps the latest completed image.
 
 ## Deployment inputs needed
 
@@ -143,7 +170,7 @@ npm ci
 npx tsc --noEmit
 
 cd ../../..
-node --test engines/melee/tests/netplay*.test.mjs
+node --test engines/melee/tests/netplay*.test.mjs engines/melee/tests/presentation.test.mjs
 g++ -std=c++20 -pthread -Wall -Wextra -Werror engines/melee/tests/netplay_gate.cpp -o /tmp/melee-netplay-gate
 /tmp/melee-netplay-gate
 python3 -m unittest discover -s engines/ssb64/netplay -p 'test_*.py'
@@ -157,6 +184,10 @@ bad packets, missing frames, disconnects, engine startup capabilities and launch
 roles. C++ tests run the actual simulation gates without ROMs. The relay suite
 uses real local TLS, UDP, HTTP/3 and WebTransport streams as well as adversarial
 room/lifecycle tests. See `netplay/tests` for the browser transport smoke test.
+That test also runs the actual presentation mailbox with independently scheduled
+30/60/144 Hz display callbacks and a fourth client with no display callbacks.
+All four synthetic simulations must complete identical ticks and release their
+images. This does not substitute for measuring actual engine rendering.
 
 Before release, run two-, three- and four-browser matches with the rebuilt game
 assets: shared seed/lineup, controls per seat, stocks/results, audio, background

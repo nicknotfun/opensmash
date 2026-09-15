@@ -1,0 +1,41 @@
+diff --git a/vendor/dolphin/Source/Core/Common/GL/GLInterface/WebGL.h b/vendor/dolphin/Source/Core/Common/GL/GLInterface/WebGL.h
+--- a/vendor/dolphin/Source/Core/Common/GL/GLInterface/WebGL.h
++++ b/vendor/dolphin/Source/Core/Common/GL/GLInterface/WebGL.h
+@@ -1,5 +1,6 @@
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ #pragma once
++#include <atomic>
+ #include <cstdio>
+ #include "Common/GL/GLContext.h"
+ #include <emscripten.h>
+@@ -30,15 +31,27 @@
+   void Swap() override {
+     EM_ASM({ Module.swapStart = performance.now(); });
+     emscripten_webgl_commit_frame();
++    // Keep guest graphics execution ordered, but never wait for the host to
++    // receive or display a snapshot. At most one bitmap can be in transit
++    // from this pthread; a busy owner merely drops presentation copies.
++    static std::atomic<unsigned> pending_bitmap{0};
++    if (pending_bitmap.exchange(1, std::memory_order_acq_rel)) return;
+     EM_ASM({
+       const committed = performance.now();
+-      const bitmap = GLctx.canvas.transferToImageBitmap();
++      let bitmap;
++      try {
++        bitmap = GLctx.canvas.transferToImageBitmap();
++        postMessage(({cmd: 'opensmash-frame', bitmap: bitmap, pending: $0}), [bitmap]);
++      } catch (error) {
++        bitmap?.close();
++        Atomics.store(HEAPU32, $0 >>> 2, 0);
++        throw error;
++      }
+       if (!(Module.swapCount++ % 60) || !Module.swapCount) {
+         Module.swapCount = Module.swapCount || 1;
+         err("[opensmash] present commit_ms=" + (committed-Module.swapStart) + " bitmap_ms=" + (performance.now()-committed));
+       }
+-      postMessage(({cmd: 'opensmash-frame', bitmap: bitmap}), [bitmap]);
+-    });
++    }, &pending_bitmap);
+   }
+   void Update() override
+   {

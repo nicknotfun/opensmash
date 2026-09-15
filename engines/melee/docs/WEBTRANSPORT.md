@@ -22,17 +22,36 @@ build, disc identity, system resources, seed, numeric launch configuration, and
 the actual staged costume/character-select bytes. Peers must
 match this fingerprint before the host can start.
 
-The worker exports protocol version 1 and accepts `netplay-frame` messages with
+The worker requires runtime capability version 2 and accepts `netplay-frame` messages with
 `frame` and four `[buttons, packedSticks, packedTriggers, connected]` packets.
 It emits `netplay-ready` with a fingerprint and `netplay-needed` with the next
 emulated frame number. `Game.tsx` samples only the local player's controls and
 translates the shared session's confirmed input into these packets. Ordinary
 unsynchronized `pad` messages are ignored online.
 
+## Browser presentation
+
+`runtime/web/presentation.mjs` keeps only the latest received bitmap. The page
+displays it on its own `requestAnimationFrame` callback. Superseded images are
+closed immediately; hiding the tab cancels presentation and releases queued
+images. Restoring the tab waits for a fresh image.
+
+Transfers are bounded separately: one bitmap may be in transit from the GPU
+pthread to its owner, and one from the owner to the page, with at most one
+replacement waiting in the owner. The page acknowledges receipt before drawing.
+If a receiver falls behind, the producer drops presentation copies and continues
+executing guest commands. Neither image-transfer credits nor RAF advance or
+release the emulated input gate.
+
+This separates **browser presentation** from simulation. Guest graphics commands
+and the emulated CPU still execute in their deterministic order; their execution
+cost can still slow simulation. This does not introduce asynchronous guest GPU
+execution or interpolate missing game frames.
+
 ## Build and checks
 
 The JavaScript bridge requires a rebuilt Wasm engine. Existing binaries without
-`opensmash_netplay_version() == 1` fail closed instead of pretending to synchronize.
+`opensmash_netplay_version() == 2` fail closed instead of pretending to synchronize.
 From this checkout, change into `engines/melee` and follow the
 [playable browser build](CHECKOUT.md#playable-browser-build) steps to prepare the
 pinned dependencies and the user's verified disc, then build the Wasm engine.
@@ -44,10 +63,12 @@ compiler required):
 g++ -std=c++20 -pthread -Wall -Wextra -Werror engines/melee/tests/netplay_gate.cpp -o /tmp/melee-netplay-gate-test
 /tmp/melee-netplay-gate-test
 node --test engines/melee/tests/netplay.test.mjs engines/melee/tests/netplay_session.test.mjs
+node --test engines/melee/tests/presentation.test.mjs
 ```
 
 These verify waiting, ordering, bounded buffering, cancellation, controller
-encoding, fingerprint changes and fresh-session startup. They do **not** prove
+encoding, fingerprint changes, fresh-session startup and bounded independent
+presentation scheduling. They do **not** prove
 Melee gameplay determinism, performance, or a completed multiplayer match.
 Release validation still needs the rebuilt engine and two independent browsers
 using the same supported disc: full match/results/rematch, several stages and

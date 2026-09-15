@@ -59,7 +59,7 @@ export function warmMelee(){
   if(data.type==='ready-for-selection'){session.readyAt=Date.now();resolve();}
   if(data.type==='disc-verified'&&disc)verifiedDiscs.add(disc);
   if(data.type==='error')reject(Error(data.message));
-  if(data.type==='frame'&&!worker.onmessage)data.bitmap.close();
+  if(data.type==='frame'&&!worker.onmessage){data.bitmap.close();worker.postMessage({type:'frame-received',id:data.id});}
  });
  worker.addEventListener('error',e=>reject(Error(e.message||'The engine could not start.')));
  const query=new URLSearchParams(location.search);
@@ -90,7 +90,7 @@ export function claimOnlineMelee(seed:number,selection:unknown):Session{
  worker.addEventListener('message',({data})=>{
   if(data.type==='netplay-ready'){session.readyAt=Date.now();resolve();}
   if(data.type==='error')reject(Error(data.message));
-  if(data.type==='frame'&&!worker.onmessage)data.bitmap.close();
+  if(data.type==='frame'&&!worker.onmessage){data.bitmap.close();worker.postMessage({type:'frame-received',id:data.id});}
  });
  worker.addEventListener('error',e=>reject(Error(e.message||'The engine could not start.')));
  worker.postMessage({type:'start',warm:true,character:'multiplayer',skin:'host',

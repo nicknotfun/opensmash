@@ -1,10 +1,32 @@
 # Smash 64 browser lockstep
 
 The website's WebTransport session exchanges **confirmed inputs for each VI
-simulation tick**. `PortPushFrame` returns before cheats, VI retrace, controller
-reads or coroutine resumes until the four-port batch for that tick arrives.
+simulation tick**. The online main loop awaits that batch and a monotonic 60 Hz
+timer deadline before calling `PortPushFrame`. Its synchronous guard prevents
+cheats, VI retrace, controller reads or coroutine resumes without confirmed input.
 Input is held constant for every controller read in that tick. No prediction or
 rollback is performed. A slow or disconnected player stalls the match.
+
+## Simulation and presentation
+
+Online scheduling never waits for `requestAnimationFrame`. Confirmation wakes
+the simulation wait directly; the 60 Hz clock limits its speed independently of
+the display's refresh rate. After a long stall it allows at most two overdue
+ticks, discards excess wall-time debt, and preserves every numbered input and
+simulation tick. Every tick yields a browser task so buffered inputs cannot
+starve network/UI work. An already committed tick can be retried without
+resampling input. Ordinary offline play retains its existing display pacer.
+
+The browser compositor displays the latest completed canvas image. Fast3D still
+executes each tick's graphics commands synchronously: those commands reference
+live guest memory and calculate emulated RCP task timing. They cannot safely be
+deferred across simulation ticks or skipped as if they were independent image
+snapshots. The online build disables interpolated subframe pacing and SDL's
+implicit Asyncify yields. Rendering/GPU cost still shares the simulation thread;
+this is independent scheduling, not a separate headless or parallel renderer.
+Browser timer throttling, a slow GPU or a blocked main thread can still stall an
+online match. Moving graphics to another worker needs guest-resource snapshots
+and a separate emulated RCP accounting path, plus real-game validation.
 
 The game starts from the room's common launch URL and RNG seed. The patch also
 replaces the game's time-derived random helpers with its seeded generator for
@@ -13,7 +35,7 @@ retains the upstream behavior. The boot input is neutral on every peer.
 
 `web-prototype/public/ssb64-netplay.js` connects the engine iframe to its parent's
 session. The server injects it with the controller remapper. Before `callMain`,
-the bridge checks the **compiled** `_port_netplay_version` export and hashes the
+the bridge requires **compiled** `_port_netplay_version() == 2` and hashes the
 WASM, loaded MEMFS assets and launch environment. O2R ZIP resources are hashed
 by name and compressed payload, excluding timestamps and archive ordering so
 independent extractions of the same ROM match. Each session uses a fresh
@@ -39,8 +61,10 @@ website; the website provides the bridge script.
 
 ## Validation boundary
 
-Tests exercise delayed/missing frames, exact input publication, malformed
-payloads, capability rejection, startup ordering and common seed setup. The
+Tests exercise 180 ordered simulation ticks with 30 Hz, 144 Hz and absent display
+callbacks, bounded catch-up after a minute-long stall, task yields, delayed/missing
+frames, exact input publication, malformed payloads, capability rejection,
+startup ordering and common seed setup. The
 engine patches are pinned so upstream changes cannot silently move the gate.
 Actual two-browser gameplay, especially cross-browser floating-point behavior,
 requires the compiled runtime and a user-provided ROM. The startup fingerprint

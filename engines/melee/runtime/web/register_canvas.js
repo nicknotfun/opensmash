@@ -8,7 +8,14 @@ if (typeof Worker !== 'undefined') {
       this.addEventListener('message', event => {
         if (event.data?.cmd === 'opensmash-frame') {
           event.stopImmediatePropagation();
-          Module['onFrame']?.(event.data.bitmap);
+          try {
+            if (Module['onFrame']) Module['onFrame'](event.data.bitmap);
+            else event.data.bitmap.close();
+          } finally {
+            // Return only the image-transfer credit. The guest never waits
+            // for this flag, and it has no connection to the input gate.
+            if (event.data.pending) Atomics.store(HEAPU32, event.data.pending >>> 2, 0);
+          }
         }
       });
     }

@@ -13,7 +13,7 @@ std::uint32_t rtc_seed = 0;
 
 extern "C" void opensmash_set_pad(unsigned, unsigned, unsigned, unsigned, unsigned);
 
-extern "C" EMSCRIPTEN_KEEPALIVE unsigned opensmash_netplay_version() { return 1; }
+extern "C" EMSCRIPTEN_KEEPALIVE unsigned opensmash_netplay_version() { return 2; }
 extern "C" EMSCRIPTEN_KEEPALIVE unsigned opensmash_netplay_enable(unsigned seed) {
   if (enabled.load()) return 0; // A session always owns a fresh runtime.
   rtc_seed = seed;

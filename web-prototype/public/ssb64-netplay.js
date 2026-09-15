@@ -2,7 +2,7 @@
  * supplies confirmed frames through openSmashNetplay.nextFrame(). */
 (function (global) {
   "use strict";
-  const VERSION = 1;
+  const VERSION = 2;
   const neutral = () => [0, 0, 0, 0, 0, 0, 0];
 
   function localPad(host, shell) {
@@ -34,9 +34,34 @@
     return pads.map(p => [...p]);
   }
 
-  function createGate({ module, session, sample, players }) {
+  function createClock({ now = () => global.performance.now(), sleep = ms => new Promise(resolve => global.setTimeout(resolve, ms)) } = {}) {
+    const period = 1000 / 60;
+    let deadline = null, previousTick = -1;
+    return {
+      yield: () => sleep(0),
+      async wait(tick) {
+        if (!Number.isSafeInteger(tick) || tick !== previousTick + 1) throw Error("Smash 64 simulation clock order changed.");
+        previousTick = tick;
+        const current = now();
+        deadline = deadline === null ? current : deadline + period;
+        // Keep at most two overdue ticks. Discard excess wall-time debt,
+        // never game ticks or confirmed input, after network/host stalls.
+        if (current - deadline > period * 2) deadline = current - period;
+        let yielded = false;
+        while (deadline > now()) {
+          yielded = true;
+          await sleep(deadline - now());
+        }
+        // A slow GPU or a backlog must still yield a browser task. A chain
+        // of already-resolved promises would starve input/network events.
+        if (!yielded) await sleep(0);
+      },
+    };
+  }
+
+  function createGate({ module, session, sample, players, clock = createClock() }) {
     const occupied = new Set(players.map(p => p.seat));
-    let current = Array.from({ length: 4 }, neutral), requested = -1, committed = -1, failed = false;
+    let current = Array.from({ length: 4 }, neutral), requested = -1, committed = -1, failed = false, pending;
     function fail(error) {
       if (failed) return;
       failed = true;
@@ -45,24 +70,47 @@
     return {
       enabled: true,
       fail,
-      beforeFrame(tick) {
+      async waitFrame(tick) {
         if (session.closed && !failed) fail(Error(session.error || "This game has ended."));
         if (failed) return false;
-        if (committed === tick) return true;
-        if (requested === tick) return false;
-        if (!Number.isSafeInteger(tick) || tick !== requested + 1) {
+        if (!Number.isSafeInteger(tick) || tick < 0) {
+          fail(Error("Smash 64 simulation frame order changed."));
+          return false;
+        }
+        if (committed === tick) {
+          // A same-tick engine retry reuses input but must not spin through
+          // resolved Asyncify promises while asset/network tasks wait.
+          await clock.yield?.();
+          if (session.closed && !failed) fail(Error(session.error || "This game has ended."));
+          return !failed;
+        }
+        if (requested === tick) return pending;
+        if (tick !== requested + 1 || requested !== committed) {
           fail(Error("Smash 64 simulation frame order changed."));
           return false;
         }
         requested = tick;
-        try {
-          Promise.resolve(session.nextFrame(tick, sample())).then(pads => {
-            if (failed) return;
-            current = checkedPads(pads);
+        pending = (async () => {
+          try {
+            const pads = checkedPads(await session.nextFrame(tick, sample()));
+            if (failed) return false;
+            // Confirmed input wakes this wait directly. Presentation and
+            // requestAnimationFrame have no role in the simulation clock.
+            await clock.wait(tick);
+            if (session.closed && !failed) fail(Error(session.error || "This game has ended."));
+            if (failed) return false;
+            current = pads;
             committed = tick;
-          }).catch(fail);
-        } catch (error) { fail(error); }
-        return false;
+            return true;
+          } catch (error) { fail(error); return false; }
+        })();
+        return pending;
+      },
+      beforeFrame(tick) {
+        if (session.closed && !failed) fail(Error(session.error || "This game has ended."));
+        // This boundary cannot suspend inside a game coroutine. The main
+        // context must have completed waitFrame before resuming the tick.
+        return !failed && tick >= 0 && committed === tick;
       },
       readPorts(ptr) {
         const heap = module.HEAP32, start = ptr >>> 2;
@@ -155,6 +203,9 @@
     env.SSB64_LOCKSTEP = "1";
     env.SSB64_LOCKSTEP_SEED = String(seed);
     env.SSB64_VS_INTRO = "0";
+    // Fast3D's interpolated subframes have their own display pacer. Online
+    // ticks execute exactly one graphics pass; the compositor is independent.
+    env.SSB64_INTERP_FPS = "0";
     env.SSB64_SAVE_PATH = "/opensmash-netplay-save.bin";
     const fs = module.FS || shell.FS;
     if (fs?.analyzePath(env.SSB64_SAVE_PATH).exists) fs.unlink(env.SSB64_SAVE_PATH);
@@ -184,5 +235,5 @@
     };
   }
 
-  global.openSmashSsb64Netplay = { install, createGate, prepare, localPad, fingerprint, assetDigest };
+  global.openSmashSsb64Netplay = { install, createClock, createGate, prepare, localPad, fingerprint, assetDigest };
 })(globalThis);

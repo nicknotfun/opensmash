@@ -30,22 +30,54 @@ index 9b0e715..4b5e2ed 100644
  		return;
  	}
 diff --git a/port/port.cpp b/port/port.cpp
-index 24b78db..33d5f33 100644
+index 24b78db..74f672b 100644
 --- a/port/port.cpp
 +++ b/port/port.cpp
-@@ -46,6 +46,7 @@ extern "C" { extern int gPortProfEnabled; extern uint64_t gPortProfStageNs[8]; e
+@@ -46,6 +46,10 @@ extern "C" { extern int gPortProfEnabled; extern uint64_t gPortProfStageNs[8]; e
  #include "port_window_icon.h"
  #endif
  #ifdef __EMSCRIPTEN__
 +extern "C" void port_netplay_init(void);
++extern "C" int port_netplay_enabled(void);
++extern "C" int port_netplay_wait_frame(uint32_t tick);
++extern "C" int port_get_frame_count(void);
  #include <emscripten.h>
  #include <emscripten/heap.h>
  
-@@ -1389,6 +1390,7 @@ int main(int argc, char* argv[]) {
+@@ -1389,6 +1393,13 @@ int main(int argc, char* argv[]) {
  
  #ifdef __EMSCRIPTEN__
  	fprintf(stderr, "SSB64[wasm]: entering PortInit\n");
 +	port_netplay_init();
++	if (port_netplay_enabled()) {
++		/* A swap must not add another Asyncify wait inside the tick. The
++		 * online main-context clock owns pacing; the browser composites the
++		 * latest completed canvas independently. */
++		SDL_SetHintWithPriority(SDL_HINT_EMSCRIPTEN_ASYNCIFY, "0", SDL_HINT_OVERRIDE);
++	}
  #endif
  	if (PortInit(argc, argv) != 0) {
  		return 1;
+@@ -1505,6 +1516,13 @@ int main(int argc, char* argv[]) {
+ #endif
+ 	while (WindowIsRunning()) {
+ #ifdef __EMSCRIPTEN__
++		/* Wait for the next confirmed 60 Hz simulation tick on the main
++		 * context, never in a render callback or coroutine. Online input
++		 * arrival can resume this loop even when no rAF callback fires. */
++		if (port_netplay_enabled() &&
++		    !port_netplay_wait_frame((uint32_t)port_get_frame_count())) {
++			break;
++		}
+ 		/* Stall attributor (SSB64_STALL_WATCH=1, off by default).
+ 		 * Splits each frame's wall time into work done INSIDE wasm
+ 		 * (PortPushFrame) versus time the browser held the main thread
+@@ -1567,7 +1585,7 @@ int main(int argc, char* argv[]) {
+ 		 * Asyncify while awaiting fetch; they do not advance the frame. Also
+ 		 * paces the game to ~60Hz since the in-fiber pacer is disabled
+ 		 * on WASM (see gameloop.cpp). */
+-		{
++		if (!port_netplay_enabled()) {
+ 			if ((frame % 60) == 1) {
+ 				EM_ASM({ document.title = 'BattleShip f=' + $0; }, frame);
+ 			}

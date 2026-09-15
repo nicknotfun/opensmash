@@ -63,6 +63,7 @@ try {
   const port = await unusedTCPPort();
   const relayURL = `https://127.0.0.1:${port}`;
   const sharedClient = await readFile(join(repo, 'web-prototype/shared/netplay-client.js'));
+  const presentation = await readFile(join(repo, 'engines/melee/runtime/web/presentation.mjs'));
   app = http.createServer((req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     if (req.url === '/api/netplay/config') {
@@ -71,6 +72,9 @@ try {
     }
     if (req.url === '/netplay-client.js') {
       res.setHeader('Content-Type', 'text/javascript'); return res.end(sharedClient);
+    }
+    if (req.url === '/presentation.mjs') {
+      res.setHeader('Content-Type', 'text/javascript'); return res.end(presentation);
     }
     if (req.url !== '/') { res.writeHead(404); return res.end(); }
     res.setHeader('Content-Type', 'text/html');
@@ -136,23 +140,55 @@ try {
   await waitState(players[0], state => state?.room.players.every(p => p.ready));
   await players[0].evaluate(() => window.session.start());
   await Promise.all(players.map(page => waitState(page, state => state?.started)));
-  const results = await Promise.all(players.map(page => page.evaluate(async ticks => {
+  const presentationRates = [30, 60, 144, null];
+  const results = await Promise.all(players.map((page, index) => page.evaluate(async ({ticks, renderHz}) => {
+    const {createBitmapPresenter} = await import('/presentation.mjs');
+    const canvas = document.createElement('canvas'); canvas.width = 8; canvas.height = 8;
+    document.body.append(canvas);
+    const context = canvas.getContext('bitmaprenderer');
+    const source = new OffscreenCanvas(8, 8), drawing = source.getContext('2d');
+    const presented = [];
+    let disposed = 0;
+    // Exercise the actual presentation mailbox at independently scheduled
+    // display rates. The fourth browser never gets a display callback at all.
+    // Input waits and synthetic simulation ticks do not call this scheduler.
+    const presenter = createBitmapPresenter({
+      requestFrame: callback => renderHz === null ? 1 : setTimeout(callback, 1000 / renderHz),
+      cancelFrame: handle => { if (renderHz !== null) clearTimeout(handle); },
+      present: snapshot => {
+        context.transferFromImageBitmap(snapshot.bitmap);
+        presented.push(snapshot.tick);
+      },
+    });
     const frames = [];
     const pad = (tick, seat) => [1 << seat, ((tick * 3 + seat) % 256) - 128,
       ((tick * 7 + seat * 2) % 256) - 128, seat * 10, -seat * 10, tick % 256, seat * 50];
-    for (let tick = 0; tick < ticks; tick++) {
-      const pads = await window.session.nextFrame(tick, pad(tick, window.session.seat));
-      const expected = Array.from({length: 4}, (_, seat) => tick < 3 ? [0, 0, 0, 0, 0, 0, 0] : pad(tick - 3, seat));
-      if (JSON.stringify(pads) !== JSON.stringify(expected)) throw Error(`Incorrect confirmed pads at tick ${tick}`);
-      frames.push(pads);
-      await new Promise(resolve => setTimeout(resolve, 16));
-    }
+    try {
+      for (let tick = 0; tick < ticks; tick++) {
+        const pads = await window.session.nextFrame(tick, pad(tick, window.session.seat));
+        const expected = Array.from({length: 4}, (_, seat) => tick < 3 ? [0, 0, 0, 0, 0, 0, 0] : pad(tick - 3, seat));
+        if (JSON.stringify(pads) !== JSON.stringify(expected)) throw Error(`Incorrect confirmed pads at tick ${tick}`);
+        frames.push(pads);
+        drawing.fillStyle = `rgb(${tick % 256}, ${pads[0][0] % 256}, 100)`;
+        drawing.fillRect(0, 0, 8, 8);
+        const bitmap = source.transferToImageBitmap();
+        presenter.offer({tick, bitmap, close() { disposed++; bitmap.close(); }});
+        await new Promise(resolve => setTimeout(resolve, 16));
+      }
+    } finally { presenter.dispose(); }
     const bytes = new TextEncoder().encode(JSON.stringify(frames));
     const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(b => b.toString(16).padStart(2, '0')).join('');
-    return {seat: window.session.seat, ticks: frames.length, hash, error: window.session.error};
-  }, TICKS)));
+    return {seat: window.session.seat, ticks: frames.length, hash, error: window.session.error,
+      renderHz, presented, disposed};
+  }, {ticks: TICKS, renderHz: presentationRates[index]})));
   assert.equal(new Set(results.map(result => result.seat)).size, 4);
-  for (const result of results) { assert.equal(result.ticks, TICKS); assert.equal(result.error, ''); assert.equal(result.hash, results[0].hash); }
+  for (const result of results) {
+    assert.equal(result.ticks, TICKS); assert.equal(result.error, ''); assert.equal(result.hash, results[0].hash);
+    assert.equal(result.disposed, TICKS, 'every completed image must be released exactly once');
+    assert.ok(result.presented.every((tick, index, values) => index === 0 || tick > values[index - 1]), 'presentation must never go backwards');
+    if (result.renderHz === null) assert.equal(result.presented.length, 0, 'simulation must finish without any display callbacks');
+    else assert.ok(result.presented.length > 0 && result.presented.length <= TICKS);
+  }
   await players[3].evaluate(() => window.session.close('Disconnect smoke test.'));
   await Promise.all(players.slice(0, 3).map(async page => {
     await page.waitForFunction(() => window.session.closed && Boolean(window.session.error), null, {timeout: 10000});
@@ -162,7 +198,8 @@ try {
     }); assert.equal(rejected, true, 'disconnected matches must stop simulation');
   }));
   console.log(JSON.stringify({ok: true, browser: browserVersion, players: 4, ticks: TICKS,
-    frameHash: results[0].hash, fifthPlayerRejected: true, disconnectStoppedAll: true}, null, 2));
+    frameHash: results[0].hash, presentation: results.map(({renderHz, presented, disposed}) => ({renderHz, images: presented.length, released: disposed})),
+    simulationIndependentOfPresentation: true, fifthPlayerRejected: true, disconnectStoppedAll: true}, null, 2));
 } catch (error) {
   console.error('Relay diagnostics:', redact(relayLogs));
   console.error('Browser diagnostics:', browserLogs.slice(-12));

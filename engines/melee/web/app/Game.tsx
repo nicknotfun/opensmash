@@ -8,6 +8,7 @@ import {connectAudio,unlockAudio,setAudioEnabled} from '@/lib/audio';
 import {stopAnnouncer} from '@/lib/announcer';
 import {claimMelee,claimOnlineMelee,releaseMelee} from '@/lib/melee-session';
 import {packNetworkPad} from '../../runtime/web/netplay.mjs';
+import {createBitmapPresenter} from '../../runtime/web/presentation.mjs';
 import {keyLabel,loadBindings,rawGamepads,sampleMeleePad,type Action} from '@/lib/controls';
 // GameCube button bits in the pad word, keyed by the control id from the bindings module.
 const bits:Record<string,number>={a:0x100,b:0x200,x:0x400,y:0x800,z:0x10,l:0x40,r:0x20,start:0x1000};
@@ -23,6 +24,13 @@ export default function Game({fighter,settings,roster,onClose,soundOn=true}:{fig
   let playable=settings.mode!==0, audioConnecting=false;
   const netplay=(window as any).openSmashNetplay;
   let running=false,firstFrame=true,selectionAcknowledged=false,fullBootVisible=false,frameSamples:number[]=[],launchPlan:any;
+  const presentation=createBitmapPresenter({visible:!document.hidden,present:(bitmap:ImageBitmap)=>{
+   canvas.current?.getContext('bitmaprenderer')?.transferFromImageBitmap(bitmap);
+   if(firstFrame){firstFrame=false;canvas.current?.focus();}
+   if(settings.mode===4&&selectionAcknowledged&&!fullBootVisible){fullBootVisible=true;setStatus('');}
+  }});
+  const visibility=()=>{presentation.setVisible(!document.hidden);worker?.postMessage({type:'presentation-visible',visible:!document.hidden});};
+  document.addEventListener('visibilitychange',visibility);
   const skin=!netplay&&new URLSearchParams(location.search).get('skin')==='gx'?'gx':'host';
   const sampleNetwork=()=>{
    const held=(action:Action)=>!gameInputBlocked()&&(keys.has(kb[action])||touch.current.has(kb[action]));
@@ -94,15 +102,20 @@ export default function Game({fighter,settings,roster,onClose,soundOn=true}:{fig
    if(netplay)session=claimOnlineMelee(netplay.room.config.seed,selection);
    if(!session)throw Error('The Melee session could not start.');
    worker=session.worker;gameWorker.current=worker;
+   visibility();
    const audio=session.audio;
    const startAudio=()=>{if(audioConnecting)return;audioConnecting=true;connectAudio(audio).then(node=>{if(closed)node.disconnect();else audioNode=node;}).catch(()=>{audioConnecting=false;});};
    if(playable)startAudio();
    worker.onerror=e=>{if(!closed){setError(e.message||'The game worker stopped.');netplay?.fail(Error(e.message||'The game worker stopped.'));}};
    worker.onmessage=({data})=>{
-    if(closed)return;
-    if(data.type==='frame'){canvas.current?.getContext('bitmaprenderer')?.transferFromImageBitmap(data.bitmap);if(firstFrame){firstFrame=false;canvas.current?.focus();}}
+    if(closed){if(data.type==='frame')data.bitmap.close();return;}
+    if(data.type==='frame'){
+     presentation.offer(data.bitmap);
+     // Acknowledge message receipt, never display completion. Hidden/stalled
+     // rendering can discard every snapshot while simulation keeps ticking.
+     worker?.postMessage({type:'frame-received',id:data.id});
+    }
     if(data.type==='session' && data.launch)selectionAcknowledged=true;
-    if(data.type==='frame' && settings.mode===4 && selectionAcknowledged && !fullBootVisible){fullBootVisible=true;setStatus('');}
     if(data.type==='status' && !fullBootVisible)setStatus(data.message);
     if(data.type==='started'){running=true;}
     if(data.type==='netplay-ready'&&netplay)netplay.ready(data.fingerprint).catch((error:Error)=>{if(!closed){setError(error.message);worker?.postMessage({type:'netplay-stop'});netplay.fail(error);}});
@@ -127,7 +140,7 @@ export default function Game({fighter,settings,roster,onClose,soundOn=true}:{fig
    if(!netplay)raf=requestAnimationFrame(()=>send());
   }catch(e){if(!closed){setError((e as Error).message);netplay?.fail(e);}}}
   start();
-  return()=>{closed=true;abort.abort();cancelAnimationFrame(raf);if(worker)releaseMelee(worker);audioNode?.disconnect();window.removeEventListener('keydown',keydown);window.removeEventListener('keyup',keyup);window.removeEventListener('blur',blur);touch.current.clear();};
+  return()=>{closed=true;abort.abort();cancelAnimationFrame(raf);presentation.dispose();document.removeEventListener('visibilitychange',visibility);if(worker)releaseMelee(worker);audioNode?.disconnect();window.removeEventListener('keydown',keydown);window.removeEventListener('keyup',keyup);window.removeEventListener('blur',blur);touch.current.clear();};
  },[fighter,settings,roster,attempt]);
  const control=(label:string,code:string)=><button key={code} onPointerDown={e=>{e.currentTarget.setPointerCapture(e.pointerId);touch.current.add(code);}} onPointerUp={()=>touch.current.delete(code)} onPointerCancel={()=>touch.current.delete(code)}>{label}</button>;
  return <div className="game-overlay" role="region" aria-label={'Play as '+fighter.name}><section className="game-panel"><header><div><h2>{fighter.name}</h2><p>{names[settings.ports[0].target && settings.ports[0].target !== 'auto' ? settings.ports[0].target : fighter.target]} moveset · {schema.modes.find(m=>m.id===settings.mode)?.label}</p></div><span className="fps" data-slow={fps!==null&&fps<58.5} title="Target: sustained 60 FPS in combat">{fps===null?'':Math.round(fps)+' FPS'}</span><button onClick={()=>{const panel=canvas.current?.closest('.intro-video-frame');if(document.fullscreenElement)void document.exitFullscreen();else void panel?.requestFullscreen();}} aria-label="Toggle fullscreen">⛶</button><button onClick={()=>{if(document.fullscreenElement)void document.exitFullscreen();onClose();}} aria-label="Return to roster">✕</button></header><div className="game-screen"><canvas id="canvas" key={attempt} ref={canvas} width={960} height={720} tabIndex={0}/>{status&&!error&&<p className="game-message" role="status">{status}</p>}{error&&<div className="game-message" role="alert"><p>{error}</p>{!(window as any).openSmashNetplay&&<button onClick={()=>{setError('');setStatus('Preparing…');setFps(null);setAttempt(n=>n+1);}}>Try again</button>}</div>}</div><button className="sound-game" onClick={()=>void unlockAudio()}>Enable sound</button><button className="confirm-game" onClick={()=>{if((window as any).openSmashNetplay)networkButtons.current|=0x100;else gameWorker.current?.postMessage({type:'confirm'});}}>Confirm · A</button><p className="game-help">{[keyLabel(kb.up),keyLabel(kb.left),keyLabel(kb.down),keyLabel(kb.right)].join(' ')} move · {keyLabel(kb.a)} attack · {keyLabel(kb.b)} special · {keyLabel(kb.x)} / {keyLabel(kb.y)} jump · {keyLabel(kb.l)} / {keyLabel(kb.r)} shield · {keyLabel(kb.z)} grab · {[kb.cup,kb.cleft,kb.cdown,kb.cright].map(keyLabel).join(' ')} smash · {keyLabel(kb.start)} start / pause<br/>Rebind keys and gamepads under Controls. Press {keyLabel(kb.a)} to confirm any first-run memory card prompt.</p><div className="touch-controls">{control('←',kb.left)}{control('↑',kb.up)}{control('↓',kb.down)}{control('→',kb.right)}{control('Attack',kb.a)}{control('Special',kb.b)}{control('Jump',kb.x)}{control('Shield',kb.l)}{control('Start',kb.start)}</div></section></div>;

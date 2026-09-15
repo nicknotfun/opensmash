@@ -7,6 +7,13 @@ players with matching content fingerprints, and compares 180 confirmed ticks of
 distinct controller inputs across all four browsers. It then disconnects one
 player and verifies that every remaining session stops accepting simulation work.
 
+Each browser uses the runtime's actual latest-image presentation mailbox, with
+independently scheduled 30, 60, or 144 Hz display callbacks. The fourth browser
+gets no display callbacks. The synthetic simulation still completes the same
+180 ticks on every client, and all 180 generated images per client must be
+released. These controlled display schedules test independence from presentation;
+they do not measure physical monitor refresh rates or bypass browser throttling.
+
 The engine loop is synthetic: this validates browser/QUIC/client interoperability
 and input delivery, not Smash 64 or Melee determinism. No ROM is needed.
 
@@ -46,7 +53,7 @@ client and certificate configuration are unchanged. Temporary services,
 certificates and browser contexts are removed after the run.
 
 Success prints the browser version, player/tick count, common SHA-256 frame hash,
-and the admission/disconnection assertions. A browser lacking compatible
+image presentation/release counts and the admission/disconnection assertions. A browser lacking compatible
 WebTransport support fails the test instead of silently using another transport.
 
 Verified with Google Chrome 151.0.7922.75: all four clients produced frame hash

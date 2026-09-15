@@ -17,7 +17,9 @@ class RuntimeTests(unittest.TestCase):
 #pragma once
 #define EMSCRIPTEN_KEEPALIVE
 extern int test_gate(unsigned tick);
+extern int test_wait(unsigned tick);
 #define EM_ASM_INT(code, tick) test_gate(tick)
+#define EM_ASYNC_JS(type, name, args, ...) type name args { return test_wait(tick); }
 """)
             (root / "test.cpp").write_text("""
 #include <cassert>
@@ -27,16 +29,20 @@ extern "C" int port_netplay_version();
 extern "C" int port_netplay_enabled();
 extern "C" void port_netplay_init();
 extern "C" int port_netplay_before_frame(uint32_t);
+extern "C" int port_netplay_wait_frame(uint32_t);
 static uint32_t seed;
 static int calls = 0;
 static unsigned last_tick = 0;
 static bool available = false;
 extern "C" void syUtilsSetRandomSeed(int32_t value) { seed = (uint32_t)value; }
 int test_gate(unsigned tick) { ++calls; last_tick = tick; return available; }
+int test_wait(unsigned tick) { return tick == 17; }
 int main() {
   unsetenv("SSB64_LOCKSTEP");
   port_netplay_init();
-  assert(port_netplay_version() == 1);
+  assert(port_netplay_version() == 2);
+  assert(!port_netplay_wait_frame(0));
+  assert(port_netplay_wait_frame(17));
   assert(!port_netplay_enabled());
   assert(port_netplay_before_frame(0));
   assert(calls == 0);
