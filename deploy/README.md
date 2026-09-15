@@ -23,7 +23,8 @@ these generated artifacts; players do not assemble workspaces or compile code.
 The Melee service returns 503 until provisioned. Real multiplayer gameplay must
 be validated with the matching game files.
 
-See [the deployed resource inventory](LIVE.md) for the current project and prerequisites.
+See [the network architecture diagrams](ARCHITECTURE.md) for traffic paths and
+[the deployed resource inventory](LIVE.md) for the current project and prerequisites.
 
 ## 1. Connect accounts and create the project
 
