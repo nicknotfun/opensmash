@@ -59,3 +59,29 @@ WebTransport support fails the test instead of silently using another transport.
 Verified with Google Chrome 151.0.7922.75: all four clients produced frame hash
 `4a4f1ccd16546746ccc112ca2a7f7f38cf4e828b862b407e13aea81c432301af`
 over 180 ticks; fifth-player rejection and disconnect termination passed.
+
+## Live deployment smoke test
+
+Run this explicitly against a deployment you own after its website and relay
+are healthy. It creates one temporary synthetic four-player room and uses the
+published `/api/netplay/config`, actual cross-origin room API, and actual
+WebTransport connections with normal public certificate validation. It does not
+install certificate exceptions or supply certificate fingerprints.
+
+```sh
+node netplay/tests/live-smoke.mjs https://smash.not.fun https://relay.smash.not.fun
+```
+
+The same `PLAYWRIGHT_MODULE` and `CHROME_BIN` overrides work here. Node 22+ and a
+compatible Chromium are required; the live test does not build a local relay.
+The second URL must match the website's published relay URL. Only three random
+test-harness URLs under the website origin are fulfilled from the local checkout;
+configuration, REST, CORS and QUIC traffic reach the real deployed services.
+
+This repeats the four-client input, presentation independence, fifth-player
+rejection and disconnect assertions above. A successful run ends its own room
+and closes all browser sessions; the relay retains the ended snapshot for its
+normal five-minute expiry. If a failure happens before a seat connects, its
+reservation instead expires under the relay's normal cleanup policy. This is a
+synthetic network test, not evidence that ROM gameplay works or stays in sync.
+It is intentionally excluded from `npm test` and routine CI.

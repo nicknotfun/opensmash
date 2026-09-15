@@ -83,7 +83,7 @@ async function main() {
     };
     const project = metadata(['projects', 'describe', options.project]);
     checkProject(project, { project: options.project });
-    const bucket = metadata(['storage', 'buckets', 'describe', `gs://${options.bucket}`, '--project', options.project]);
+    const bucket = metadata(['storage', 'buckets', 'describe', `gs://${options.bucket}`, '--raw', '--project', options.project]);
     if (!/^[0-9]+$/.test(String(project.projectNumber)) || String(bucket.project_number ?? bucket.projectNumber) !== String(project.projectNumber)) throw Error('Target bucket belongs to another project');
     const result = spawnSync('gcloud', args, { stdio: 'inherit' });
     if (result.error || result.status !== 0) throw Error('Asset upload failed; rerun to resume safely');

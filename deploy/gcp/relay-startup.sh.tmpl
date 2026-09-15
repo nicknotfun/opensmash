@@ -7,7 +7,14 @@ SITE_ORIGIN='{{SITE_ORIGIN}}'
 ACME_EMAIL='{{ACME_EMAIL}}'
 REGISTRY='{{REGISTRY}}'
 apt-get update -qq
-apt-get install -y --no-install-recommends ca-certificates curl python3 docker.io certbot
+apt-get install -y --no-install-recommends ca-certificates curl python3 docker.io certbot procps
+# Let quic-go allocate its requested UDP buffers; persist limits across reboots.
+# https://quic-go.net/docs/quic/optimizations/#udp-buffer-sizes
+cat > /etc/sysctl.d/90-opensmash-quic.conf <<'SYSCTL'
+net.core.rmem_max = 7340032
+net.core.wmem_max = 7340032
+SYSCTL
+sysctl --load /etc/sysctl.d/90-opensmash-quic.conf
 systemctl enable --now docker
 install -d -m 0700 /run/opensmash-docker
 export DOCKER_CONFIG=/run/opensmash-docker

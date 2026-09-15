@@ -19,6 +19,8 @@ Melee needs a verified private game workspace plus its matching patched browser
 runtime. The Melee endpoint returns 503 until that workspace is ready. Real
 multiplayer gameplay must be validated after those inputs are installed.
 
+See [the deployed resource inventory](LIVE.md) for the current project and prerequisites.
+
 ## 1. Connect accounts and create the project
 
 Authenticate on the deployment machine:

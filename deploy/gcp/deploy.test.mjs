@@ -105,3 +105,17 @@ test('additional source origins are explicit HTTPS origins and do not replace th
     assert.throws(() => configuration({ ...options, 'asset-origin': origin }));
   }
 });
+
+
+test('regional IPv4 addresses may omit ipVersion in the real Compute API response', () => {
+  const step = deploymentPlan(config, '/tmp/deploy').find(step => step.exists?.[1] === 'addresses');
+  const resource = {
+    selfLink: `https://www.googleapis.com/compute/v1/projects/${config.project}/regions/${config.region}/addresses/opensmash-relay`,
+    addressType: 'EXTERNAL', networkTier: 'PREMIUM', address: '136.64.109.100', status: 'RESERVED',
+  };
+  assert.doesNotThrow(() => checkExisting(step, resource, config));
+  assert.doesNotThrow(() => checkExisting(step, {...resource, ipVersion: 'IPV4'}, config));
+  assert.throws(() => checkExisting(step, {...resource, address: '2001:db8::1'}, config));
+  assert.throws(() => checkExisting(step, {...resource, ipVersion: 'IPV6'}, config));
+  assert.throws(() => checkExisting(step, {...resource, addressType: 'INTERNAL'}, config));
+});

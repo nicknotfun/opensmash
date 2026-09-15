@@ -8,6 +8,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 
 LABEL = "managed-by"
 OWNER = "opensmash-deploy"
@@ -138,7 +139,7 @@ def deployment_plan(config, raw, source="<staged-source>", private="<private-inp
     def bucket(name, public=False):
         url = f"gs://{name}"
         flags = ["--uniform-bucket-level-access"] + ([] if public else ["--public-access-prevention"])
-        ensure(["storage", "buckets", "describe", url],
+        ensure(["storage", "buckets", "describe", url, "--raw"],
                ["storage", "buckets", "create", url, f"--location={region}", *flags],
                {"kind": "bucket", "path": "labels"},
                ["storage", "buckets", "update", url, f"--update-labels={LABEL_FLAGS}"])
@@ -180,7 +181,9 @@ def deployment_plan(config, raw, source="<staged-source>", private="<private-inp
                ["firestore", "databases", "create", "--database=(default)", f"--location={region}", "--type=firestore-native"],
                {"kind": "firestore", "location": region})
         project_role(api, "roles/datastore.user")
-        run("firestore", "fields", "ttls", "update", "expireAt", "--collection-group=handoffRooms", "--enable-ttl", "--database=(default)")
+        # TTL activation is a background maintenance operation; request acceptance
+        # is sufficient for serving rooms, which also check expiry in the API.
+        run("firestore", "fields", "ttls", "update", "expireAt", "--collection-group=handoffRooms", "--enable-ttl", "--database=(default)", "--async")
         if env.get("FIGHTER_WORKER_URL"):
             worker = raw.get("fighterWorkerService", "")
             worker_region = raw.get("fighterWorkerRegion", region)
@@ -242,12 +245,58 @@ def verify_resource(data, check, project_number=None):
         raise ValueError("Worker service URL does not match the validated configuration.")
 
 
-def execute(plan, runner=subprocess.run):
+
+IAM_BINDING_COMMANDS = (
+    ("projects", "add-iam-policy-binding"),
+    ("storage", "buckets", "add-iam-policy-binding"),
+    ("artifacts", "repositories", "add-iam-policy-binding"),
+    ("secrets", "add-iam-policy-binding"),
+    ("run", "services", "add-iam-policy-binding"),
+)
+IAM_RETRY_DELAYS = (1, 2, 4, 8)
+IAM_POLICY_CONFLICT = re.compile(
+    r"\bconcurrent\s+(?:iam\s+)?policy\s+(?:changes?|updates?)\b"
+    r"|\bpolicy\b[^.\n]{0,160}\bconflicting\s+update\b"
+    r"|\betag\b[^\n]{0,120}\b(?:mismatch(?:ed)?|does not match|did not match)\b"
+    r"|\bmismatched\s+etag\b", re.IGNORECASE)
+
+
+def run_command(command, runner, sleep):
+    # These commands re-read the policy and add an existing binding safely.
+    # Retry the entire CLI operation so its next write uses the current etag.
+    retryable = command[0] == "gcloud" and any(
+        tuple(command[1:1 + len(prefix)]) == prefix for prefix in IAM_BINDING_COMMANDS)
+    if not retryable:
+        return runner(command, check=True)
+    for attempt in range(len(IAM_RETRY_DELAYS) + 1):
+        try:
+            result = runner(command, check=True, capture_output=True, text=True)
+        except subprocess.CalledProcessError as error:
+            if attempt < len(IAM_RETRY_DELAYS) and IAM_POLICY_CONFLICT.search(error.stderr or ""):
+                delay = IAM_RETRY_DELAYS[attempt]
+                print(f"IAM policy changed concurrently; retrying in {delay}s "
+                      f"(attempt {attempt + 2}/{len(IAM_RETRY_DELAYS) + 1}).", file=sys.stderr, flush=True)
+                sleep(delay)
+                continue
+            # Preserve the CLI diagnostic and original failure for callers.
+            if error.stdout:
+                print(error.stdout, end="", flush=True)
+            if error.stderr:
+                print(error.stderr, end="", file=sys.stderr, flush=True)
+            raise
+        if result.stdout:
+            print(result.stdout, end="", flush=True)
+        if result.stderr:
+            print(result.stderr, end="", file=sys.stderr, flush=True)
+        return result
+
+
+def execute(plan, runner=subprocess.run, sleep=time.sleep):
     project_number = None
     for operation in plan["operations"]:
         if "run" in operation:
             print("Running:", json.dumps(operation["run"]), flush=True)
-            runner(operation["run"], check=True)
+            run_command(operation["run"], runner, sleep)
             continue
         result = runner(operation["describe"], capture_output=True, text=True)
         if result.returncode == 0:
@@ -258,7 +307,13 @@ def execute(plan, runner=subprocess.run):
             continue
         # Missing permissions, disabled APIs and transient errors must not be
         # treated as absence or used as a reason to create/replace resources.
-        if not re.search(r"\bNOT_FOUND\b|\b404\b|does not exist|was not found", result.stderr, re.IGNORECASE):
+        missing = re.search(r"\bNOT_FOUND\b|\b404\b|does not exist|was not found", result.stderr, re.IGNORECASE)
+        # Cloud Run's CLI emits this message without a NOT_FOUND status code.
+        describe = operation["describe"]
+        if describe[:4] == ["gcloud", "run", "services", "describe"] and len(describe) > 4:
+            expected = f"ERROR: (gcloud.run.services.describe) Cannot find service [{describe[4]}]"
+            missing = missing or result.stderr.strip() == expected
+        if not missing:
             raise RuntimeError(result.stderr.strip() or "Resource inspection failed.")
         if operation["create"] is None:
             if operation["check"].get("allow_missing"):

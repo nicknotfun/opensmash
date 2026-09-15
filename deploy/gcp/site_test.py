@@ -71,6 +71,21 @@ class PlanTests(unittest.TestCase):
         self.assertIn({"kind": "firestore", "location": "us-central1"}, checks)
         self.assertTrue(any(op.get("describe", [])[1:4] == ["secrets", "versions", "describe"] for op in plan["operations"]))
         self.assertFalse(any("access" in cmd for cmd in commands))
+        ttl = next(cmd for cmd in commands if cmd[1:5] == ["firestore", "fields", "ttls", "update"])
+        self.assertIn("--enable-ttl", ttl)
+        self.assertIn("--async", ttl)
+
+    def test_bucket_inspection_uses_raw_metadata_for_project_ownership(self):
+        for full in (False, True):
+            with self.subTest(full=full):
+                plan = site.deployment_plan(config(full), {})
+                inspections = [op["describe"] for op in plan["operations"]
+                               if op.get("check", {}).get("kind") == "bucket"]
+                self.assertEqual(len(inspections), 3 if full else 1)
+                for command in inspections:
+                    self.assertEqual(command[1:4], ["storage", "buckets", "describe"])
+                    self.assertIn("--raw", command)
+                    self.assertIn("--format=json", command)
 
     def test_worker_resource_name_cannot_be_guessed_from_url_or_inject_flags(self):
         for raw in ({}, {"fighterWorkerService": "--project=another"}, {"fighterWorkerService": "worker", "fighterWorkerRegion": "us;bad"}):
@@ -156,6 +171,62 @@ class RuntimeTests(unittest.TestCase):
 
 
 class ExecutionTests(unittest.TestCase):
+    iam_command = ["gcloud", "projects", "add-iam-policy-binding", "test-smash-project",
+                   "--member=serviceAccount:api@test-smash-project.iam.gserviceaccount.com",
+                   "--role=roles/datastore.user"]
+
+    def test_iam_policy_conflicts_retry_the_whole_command_then_succeed(self):
+        command = self.iam_command
+        errors = [
+            "ABORTED: The policy was the subject of a conflicting update. Please retry the whole read-modify-write with exponential backoff.",
+            "ABORTED: The provided etag does not match the current policy.",
+        ]
+        runner = mock.Mock(side_effect=[*(subprocess.CalledProcessError(1, command, stderr=error) for error in errors),
+                                        subprocess.CompletedProcess(command, 0, "updated\n", "")])
+        sleep = mock.Mock()
+        with mock.patch.object(site.sys, "stdout"), mock.patch.object(site.sys, "stderr"):
+            site.execute({"operations": [{"run": command}]}, runner, sleep)
+        self.assertEqual(runner.call_count, 3)
+        for call in runner.call_args_list:
+            self.assertEqual(call, mock.call(command, check=True, capture_output=True, text=True))
+        self.assertEqual(sleep.call_args_list, [mock.call(1), mock.call(2)])
+
+    def test_iam_nonconflict_failures_are_not_retried(self):
+        for diagnostic in ("PERMISSION_DENIED: missing setIamPolicy permission", "HTTP 409: resource already exists", "ABORTED: request failed"):
+            with self.subTest(diagnostic=diagnostic):
+                error = subprocess.CalledProcessError(1, self.iam_command, stderr=diagnostic)
+                runner, sleep = mock.Mock(side_effect=error), mock.Mock()
+                with mock.patch.object(site.sys, "stdout"), mock.patch.object(site.sys, "stderr") as stderr:
+                    with self.assertRaises(subprocess.CalledProcessError) as raised:
+                        site.execute({"operations": [{"run": self.iam_command}]}, runner, sleep)
+                    self.assertIs(raised.exception, error)
+                    self.assertIn(mock.call(diagnostic), stderr.write.call_args_list)
+                runner.assert_called_once()
+                sleep.assert_not_called()
+
+    def test_iam_conflict_retries_are_bounded(self):
+        error = subprocess.CalledProcessError(1, self.iam_command, stderr="ABORTED: There were concurrent policy changes.")
+        runner, sleep = mock.Mock(side_effect=error), mock.Mock()
+        with mock.patch.object(site.sys, "stdout"), mock.patch.object(site.sys, "stderr"):
+            with self.assertRaises(subprocess.CalledProcessError) as raised:
+                site.execute({"operations": [{"run": self.iam_command}]}, runner, sleep)
+        self.assertIs(raised.exception, error)
+        self.assertEqual(runner.call_count, 5)
+        self.assertEqual(sleep.call_args_list, [mock.call(1), mock.call(2), mock.call(4), mock.call(8)])
+
+    def test_nonbinding_operations_are_never_retried(self):
+        for command in (["gcloud", "run", "deploy", "opensmash-site"],
+                        ["gcloud", "projects", "set-iam-policy", "test-smash-project", "policy.json"],
+                        ["gcloud", "secrets", "create", "add-iam-policy-binding"]):
+            with self.subTest(command=command):
+                error = subprocess.CalledProcessError(1, command, stderr="There were concurrent policy changes.")
+                runner, sleep = mock.Mock(side_effect=error), mock.Mock()
+                with mock.patch.object(site.sys, "stdout"):
+                    with self.assertRaises(subprocess.CalledProcessError):
+                        site.execute({"operations": [{"run": command}]}, runner, sleep)
+                runner.assert_called_once_with(command, check=True)
+                sleep.assert_not_called()
+
     def test_target_project_must_be_active_and_owned(self):
         data = {"projectId": "test-smash-project", "projectNumber": "123", "lifecycleState": "ACTIVE"}
         check = {"kind": "project", "projectId": "test-smash-project"}
@@ -186,6 +257,23 @@ class ExecutionTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "PERMISSION_DENIED"):
             site.execute(plan, runner)
         self.assertEqual(calls, [["describe"]])
+
+    def test_cloud_run_cli_missing_service_message_allows_first_deploy_only(self):
+        describe = ["gcloud", "run", "services", "describe", "opensmash-site"]
+        operation = {"describe": describe, "create": None,
+                     "check": {"kind": "labels", "path": "metadata.labels", "allow_missing": True}}
+        missing = "ERROR: (gcloud.run.services.describe) Cannot find service [opensmash-site]"
+        runner = mock.Mock(return_value=subprocess.CompletedProcess(describe, 1, "", missing + "\n"))
+        site.execute({"operations": [operation]}, runner)
+        runner.assert_called_once_with(describe, capture_output=True, text=True)
+        for diagnostic in (missing.replace("opensmash-site", "another-service"),
+                           "ERROR: (gcloud.run.services.describe) PERMISSION_DENIED: forbidden",
+                           missing + "\nPERMISSION_DENIED"):
+            with self.subTest(diagnostic=diagnostic):
+                runner = mock.Mock(return_value=subprocess.CompletedProcess(describe, 1, "", diagnostic))
+                with self.assertRaises(RuntimeError):
+                    site.execute({"operations": [operation]}, runner)
+                runner.assert_called_once()
 
     def test_missing_owned_resource_is_created_and_labeled(self):
         calls = []
