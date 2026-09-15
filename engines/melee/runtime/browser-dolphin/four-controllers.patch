@@ -1,0 +1,247 @@
+diff --git a/core/upstream/dolphin_web_core.cpp b/core/upstream/dolphin_web_core.cpp
+index 9f07725..415b521 100644
+--- a/core/upstream/dolphin_web_core.cpp
++++ b/core/upstream/dolphin_web_core.cpp
+@@ -38,6 +38,7 @@
+ #include "Core/HW/EXI/EXI_Device.h"
+ #include "Core/HW/GCKeyboard.h"
+ #include "Core/HW/GCPad.h"
++#include "Core/HW/SI/SI_Device.h"
+ #include "Core/HW/SystemTimers.h"
+ #include "Core/Host.h"
+ #include "Core/PowerPC/PowerPC.h"
+@@ -643,6 +644,9 @@ void EnsureRuntime()
+     g_controller_interface.Initialize(wsi);
+   }
+ 
++  // All four ports exist before boot; unjoined seats report disconnected.
++  for (int port = 0; port < 4; ++port)
++    Config::SetBase(Config::GetInfoForSIDevice(port), SerialInterface::SIDEVICE_GC_CONTROLLER);
+   Pad::Initialize();
+   Pad::InitializeGBA();
+   Keyboard::Initialize();
+diff --git a/core/upstream/dolphin_web_discio.cpp b/core/upstream/dolphin_web_discio.cpp
+index be24a6b..8e7c6b2 100644
+--- a/core/upstream/dolphin_web_discio.cpp
++++ b/core/upstream/dolphin_web_discio.cpp
+@@ -130,7 +130,9 @@ struct PadPollSnapshot
+ };
+ 
+ std::mutex s_input_state_mutex;
+-InputStateSnapshot s_input_state;
++std::array<InputStateSnapshot, 4> s_controller_states{};
++std::array<bool, 4> s_controller_connected{true, false, false, false};
++InputStateSnapshot& s_input_state = s_controller_states[0];
+ std::mutex s_pad_poll_mutex;
+ PadPollSnapshot s_pad_poll;
+ bool s_using_xfb_frame = false;
+@@ -844,6 +846,28 @@ void SetInputState(std::uint32_t mask, int stick_x, int stick_y, int c_stick_x,
+   s_input_update_count.fetch_add(1, std::memory_order_relaxed);
+ }
+ 
++EMSCRIPTEN_KEEPALIVE int OpenSmashControllerPorts() { return 4; }
++
++// Full snapshots from one owning worker, read atomically by Dolphin's CPU thread.
++EMSCRIPTEN_KEEPALIVE int SetControllerState(int port, int connected, std::uint32_t mask,
++    int x, int y, int cx, int cy, int left, int right, int a, int b, std::uint32_t generation)
++{
++  if (port < 0 || port >= 4 || (connected != 0 && connected != 1)) return 0;
++  InputStateSnapshot next;
++  if (connected) {
++    next.mask = mask & 0xfffffu;
++    next.generation = generation;
++    next.stick_x = ClampPadByte(x); next.stick_y = ClampPadByte(y);
++    next.c_stick_x = ClampPadByte(cx); next.c_stick_y = ClampPadByte(cy);
++    next.trigger_left = ClampPadByte(left); next.trigger_right = ClampPadByte(right);
++    next.analog_a = ClampPadByte(a); next.analog_b = ClampPadByte(b);
++  }
++  const std::lock_guard<std::mutex> lock(s_input_state_mutex);
++  s_controller_states[port] = next;
++  s_controller_connected[port] = connected != 0;
++  return 1;
++}
++
+ int SetPresentationScale(float scale)
+ {
+   if (scale < 0.25f || scale > 1.0f)
+@@ -1087,17 +1111,20 @@ const char* GetVideoStats()
+ 
+ int DolphinWeb_GetPadStatus(int pad_num, GCPadStatus* status)
+ {
+-  if (!status || pad_num != 0)
++  if (!status || pad_num < 0 || pad_num >= 4)
+     return 0;
+ 
+   InputStateSnapshot input;
++  bool connected;
+   {
+     const std::lock_guard<std::mutex> lock(s_input_state_mutex);
+-    input = s_input_state;
++    input = s_controller_states[pad_num];
++    connected = s_controller_connected[pad_num];
+   }
+ 
+   *status = {};
+-  status->isConnected = true;
++  status->isConnected = connected;
++  if (!connected) return 1;
+   status->stickX = input.stick_x;
+   status->stickY = input.stick_y;
+   status->substickX = input.c_stick_x;
+@@ -1178,6 +1205,20 @@ int DolphinWeb_GetPadStatus(int pad_num, GCPadStatus* status)
+   return 1;
+ }
+ 
++// Diagnostic boundary invokes the same controller conversion the emulator polls.
++EMSCRIPTEN_KEEPALIVE int OpenSmashReadController(int port, int field)
++{
++  GCPadStatus status{};
++  if (!DolphinWeb_GetPadStatus(port, &status)) return -1;
++  switch (field) {
++    case 0: return status.isConnected; case 1: return status.button;
++    case 2: return status.stickX; case 3: return status.stickY;
++    case 4: return status.substickX; case 5: return status.substickY;
++    case 6: return status.triggerLeft; case 7: return status.triggerRight;
++    default: return -1;
++  }
++}
++
+ const char* GetGameId()
+ {
+   return s_game_id.c_str();
+diff --git a/src/core-host.js b/src/core-host.js
+index a29d849..82a8dfe 100644
+--- a/src/core-host.js
++++ b/src/core-host.js
+@@ -635,9 +635,9 @@ export class EmulatorHost {
+     this.adapter.setInputMask(this.buttonMask);
+   }
+ 
+-  setInputState(inputState) {
+-    this.buttonMask = inputState?.mask >>> 0;
+-    this.adapter.setInputState?.(inputState);
++  setInputState(inputState, port = 0) {
++    if (port === 0) this.buttonMask = inputState?.mask >>> 0;
++    this.adapter.setInputState?.(inputState, port);
+   }
+ 
+   saveState() {
+diff --git a/src/upstream-discio-worker.js b/src/upstream-discio-worker.js
+index 0cf5de4..cc5bbf4 100644
+--- a/src/upstream-discio-worker.js
++++ b/src/upstream-discio-worker.js
+@@ -978,20 +978,15 @@ async function handleMessage(type, payload) {
+       inputMask = payload.mask >>> 0;
+       api?.setInputMask(inputMask);
+       return {};
+-    case "setInputState":
+-      applyInputStateSnapshot({
+-        mask: payload.mask,
+-        stickX: payload.stickX,
+-        stickY: payload.stickY,
+-        cStickX: payload.cStickX,
+-        cStickY: payload.cStickY,
+-        triggerLeft: payload.triggerLeft,
+-        triggerRight: payload.triggerRight,
+-        analogA: payload.analogA,
+-        analogB: payload.analogB,
+-        inputGeneration: payload.inputGeneration
+-      }, payload.inputSentAtEpochMs, "post");
++    case "setInputState": {
++      const port = payload.port ?? 0;
++      if (!Number.isInteger(port) || port < 0 || port > 3) throw new RangeError("Invalid controller port");
++      if (!api?.setControllerState) throw new Error("Runtime lacks four-controller support");
++      api.setControllerState(port, payload.connected === false ? 0 : 1, payload.mask >>> 0,
++        payload.stickX | 0, payload.stickY | 0, payload.cStickX | 0, payload.cStickY | 0,
++        payload.triggerLeft | 0, payload.triggerRight | 0, payload.analogA | 0, payload.analogB | 0, 0);
+       return {};
++    }
+     case "runFrame":
+       if (!presentationLoopActive) {
+         api?.pumpHostJobs?.();
+@@ -2178,6 +2173,7 @@ function bindApi(module) {
+     typeof module[`_${name}`] === "function" ? cwrap(name, returnType, argTypes) : null;
+ 
+   return {
++    setControllerState: optionalCwrap("SetControllerState", "number", Array(12).fill("number")),
+     mountDisc: (path) => ccall("MountDisc", "number", ["string"], [path]),
+     coreInit: optionalCwrap("CoreInit", "number", []),
+     setVideoBackend:
+diff --git a/src/upstream-worker-adapter.js b/src/upstream-worker-adapter.js
+index b6fea51..550f119 100644
+--- a/src/upstream-worker-adapter.js
++++ b/src/upstream-worker-adapter.js
+@@ -513,66 +513,13 @@ export class UpstreamWorkerAdapter {
+     this.post("setInputMask", { mask: mask >>> 0 });
+   }
+ 
+-  setInputState(state) {
+-    if (!this.loaded || !state) {
+-      return;
+-    }
+-    const mask = state.mask >>> 0;
+-    const stickX = state.stickX | 0;
+-    const stickY = state.stickY | 0;
+-    const cStickX = state.cStickX | 0;
+-    const cStickY = state.cStickY | 0;
+-    const triggerLeft = state.triggerLeft | 0;
+-    const triggerRight = state.triggerRight | 0;
+-    const analogA = state.analogA | 0;
+-    const analogB = state.analogB | 0;
+-    const signature = `${mask}:${stickX}:${stickY}:${cStickX}:${cStickY}:${triggerLeft}:${triggerRight}:${analogA}:${analogB}`;
+-    if (signature === this.lastInputStateSignature) {
+-      return;
+-    }
+-    this.lastInputStateSignature = signature;
+-    this.inputTelemetry.mainStateChangeCount += 1;
+-    const inputSentAtEpochMs = Date.now();
+-    let inputGeneration = (this.inputTelemetry.mainGeneration + 1) >>> 0;
+-    if (inputGeneration === 0) inputGeneration = 1;
+-    this.inputTelemetry.mainGeneration = inputGeneration;
+-
+-    if (this.inputStateView) {
+-      writeInputStateSnapshot(this.inputStateView, {
+-        mask,
+-        stickX,
+-        stickY,
+-        cStickX,
+-        cStickY,
+-        triggerLeft,
+-        triggerRight,
+-        analogA,
+-        analogB,
+-        inputGeneration,
+-        sentAtEpochMs: inputSentAtEpochMs
+-      });
+-      this.inputTelemetry.mainSabGeneration = inputGeneration;
+-      this.inputTelemetry.mainSabWriteCount += 1;
+-    }
+-    // Always also send via postMessage. Belt-and-suspenders: if the worker
+-    // is between SAB-poll iterations when an input arrives (e.g. it's
+-    // blocked in a long pumpHostJobs() or compile burst), the message-based
+-    // path will deliver the update on the next event-loop tick. SAB is
+-    // strictly faster when the loop is healthy; postMessage is the floor.
+-    this.post("setInputState", {
+-      mask,
+-      stickX,
+-      stickY,
+-      cStickX,
+-      cStickY,
+-      triggerLeft,
+-      triggerRight,
+-      analogA,
+-      analogB,
+-      inputSentAtEpochMs,
+-      inputGeneration
+-    });
+-    this.inputTelemetry.mainPostCount += 1;
++  setInputState(state, port = 0) {
++    if (!this.loaded || !state) return;
++    if (!Number.isInteger(port) || port < 0 || port > 3) throw new RangeError("Invalid controller port");
++    const bytes = ["stickX", "stickY", "cStickX", "cStickY", "triggerLeft", "triggerRight", "analogA", "analogB"];
++    const payload = {port, connected: state.connected !== false, mask: state.mask >>> 0};
++    for (const name of bytes) payload[name] = Math.max(0, Math.min(255, Number(state[name]) || 0)) | 0;
++    this.post("setInputState", payload);
+   }
+ 
+   runFrame() {

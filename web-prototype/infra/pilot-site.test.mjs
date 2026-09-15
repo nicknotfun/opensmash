@@ -45,6 +45,30 @@ test("full mode connects durable stores and authenticated services without enabl
   assert.throws(() => siteConfiguration({...fullConfig, privateBucket: fullConfig.publicBucket}), /must differ/);
   assert.throws(() => siteConfiguration({...fullConfig, meleeServiceToken: undefined}), /meleeServiceToken/);
 });
+test("browser Melee full mode needs no legacy game workspace service", () => {
+  const browserConfig = {...fullConfig, meleeServiceOrigin: undefined, meleeServiceToken: undefined};
+  const {environment, secrets} = siteConfiguration(browserConfig);
+  assert.equal(environment.OPENSMASH_NETPLAY_URL, fullConfig.relayOrigin);
+  assert.equal(environment.MELEE_SERVICE_ORIGIN, undefined);
+  assert.equal(secrets.MELEE_SERVICE_TOKEN, undefined);
+  assert.throws(() => siteConfiguration({...browserConfig, meleeServiceOrigin: fullConfig.meleeServiceOrigin}), /meleeServiceToken/);
+  assert.throws(() => siteConfiguration({...browserConfig, meleeServiceToken: fullConfig.meleeServiceToken}), /meleeServiceOrigin/);
+});
+test("Cloudflare TURN requires a public key id and pinned secret reference together", () => {
+  const keyId = "a".repeat(32);
+  const {environment, secrets} = siteConfiguration({...fullConfig, cloudflareTurnKeyId:keyId, cloudflareTurnSecret:"opensmash-turn:2"});
+  assert.equal(environment.CLOUDFLARE_TURN_KEY_ID,keyId);
+  assert.equal(environment.CLOUDFLARE_TURN_KEY_API_TOKEN,undefined);
+  assert.equal(secrets.CLOUDFLARE_TURN_KEY_API_TOKEN,"opensmash-turn:2");
+  for (const override of [
+    {cloudflareTurnKeyId:keyId}, {cloudflareTurnSecret:"opensmash-turn:2"},
+    {cloudflareTurnKeyId:"bad",cloudflareTurnSecret:"opensmash-turn:2"},
+    {cloudflareTurnKeyId:keyId,cloudflareTurnSecret:"opensmash-turn:latest"},
+    {cloudflareTurnKeyId:keyId,cloudflareTurnSecret:"raw-secret"},
+  ]) assert.throws(()=>siteConfiguration({...fullConfig,...override}),/cloudflareTurn/);
+  assert.throws(()=>siteConfiguration({...config,cloudflareTurnKeyId:keyId,cloudflareTurnSecret:"opensmash-turn:2"}),/mode=full/);
+});
+
 test("creation requires an authenticated worker and a runtime moderation secret reference", () => {
   const {environment, secrets} = siteConfiguration({...fullConfig, fighterWorkerOrigin: "https://worker.example.run.app", openaiSecret: "opensmash-openai:1"});
   assert.equal(environment.CREATION_ENABLED, "1");

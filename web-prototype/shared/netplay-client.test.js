@@ -127,3 +127,72 @@ test('a stalled live frame times out without continuing with neutral predictions
   await assert.rejects(f.session.nextFrame(0, [0, 0, 0, 0, 0, 0, 0]), /stopped sending inputs/);
   assert.equal(f.session.closed, true);
 });
+
+function streamRoom() {
+  return {...room(), engine: 'melee', mode: 'host-stream', players: [
+    {seat: 0, connected: true, generation: 1}, {seat: 1, connected: true, generation: 2},
+  ]};
+}
+
+test('stream start never submits lockstep input and supports joining a running room', async t => {
+  const f = await fixture(t);
+  f.session.room = streamRoom();
+  await f.emit({type: 'start', epoch: 1, seed: 42});
+  assert.equal(f.session.started, true);
+  assert.equal(f.outbound.some(message => message.type === 'input'), false);
+  await assert.rejects(f.session.nextFrame(0, [0, 0, 0, 0, 0, 0, 0]), /does not use lockstep/);
+  f.session.started = false;
+  await f.emit({type: 'room', room: {...streamRoom(), state: 'running', epoch: 1}});
+  assert.equal(f.session.started, true);
+});
+
+test('stream signaling binds to connected seat generations and buffers early offers', async t => {
+  const f = await fixture(t);
+  f.session.room = streamRoom();
+  const signal = {id: 'c'.repeat(32), description: {type: 'answer', sdp: 'v=0'}};
+  const incoming = {type: 'signal', from: 1, generation: 2, toGeneration: 1, signal};
+  await f.emit(incoming);
+  const received = [];
+  const off = f.session.subscribeSignals(message => received.push(message));
+  assert.deepEqual(received, [incoming]);
+  await f.emit({...incoming, generation: 1});
+  assert.equal(received.length, 1);
+  await f.session.signal(1, {id: signal.id, candidate: null});
+  assert.deepEqual(f.outbound.at(-1), {type: 'signal', to: 1, generation: 2, signal: {id: signal.id, candidate: null}});
+  off();
+  await f.emit(incoming);
+  f.session.room.players[1].generation = 3;
+  f.session.subscribeSignals(message => received.push(message));
+  assert.equal(received.length, 1, 'old buffered answer cannot enter replacement connection');
+});
+
+test('guests cannot signal each other and stream rooms reject lockstep frames', async t => {
+  const f = await fixture(t);
+  f.session.room = streamRoom(); f.session.seat = 1;
+  await assert.rejects(f.session.signal(1, {}), /no longer connected/);
+  await f.emit({type: 'frame', epoch: 1, tick: 0, pads: []});
+  assert.match(f.session.error, /Unexpected lockstep/);
+});
+
+test('host stream creation explicitly selects its mode without changing default creation', async () => {
+  let sent;
+  const fetchImpl = async (url, init) => {
+    if (url === '/api/netplay/config') return ok({enabled: true, relayUrl: 'https://relay.example'});
+    sent = JSON.parse(init.body);
+    return ok({room: streamRoom(), seat: 0, token});
+  };
+  await createGame('melee', {seed: 42}, {mode: 'host-stream', fetchImpl, storage: storage()});
+  assert.equal(sent.mode, 'host-stream');
+  await assert.rejects(createGame('ssb64', {}, {mode: 'host-stream', fetchImpl, storage: storage()}), /Invalid game mode/);
+});
+
+test('expected stale signaling races preserve the host while control failures remain fatal', async t => {
+  const f = await fixture(t); f.session.room = streamRoom();
+  for (const code of ['not_connected', 'stale_generation', 'stale_negotiation']) {
+    await f.emit({type:'error', request:'signal', code, message:'Old peer'});
+    assert.equal(f.session.closed,false);
+  }
+  await f.emit({type:'error', code:'not_connected', message:'Control failure'});
+  assert.equal(f.session.closed,true);
+  assert.equal(f.session.error,'Control failure');
+});

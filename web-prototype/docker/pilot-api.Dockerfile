@@ -22,7 +22,8 @@ FROM node:22-bookworm-slim AS site
 ENV NODE_ENV=production PORT=8080 HOST=0.0.0.0 \
     CREATION_ENABLED=0 FIGHTER_WORKER_DISABLED=1 \
     FIGHTER_JOBS_ROOT=/tmp/fighter-jobs OBJECT_STORE_ROOT=/tmp/objects \
-    OPENSMASH_ENGINE_ROOT=/workspace/ssb64-runtime
+    OPENSMASH_ENGINE_ROOT=/workspace/ssb64-runtime \
+    OPENSMASH_MELEE_BROWSER_ROOT=/workspace/melee-browser-runtime
 RUN corepack enable && corepack prepare pnpm@11.5.0 --activate
 WORKDIR /workspace/web-prototype
 COPY web-prototype/package.json web-prototype/pnpm-lock.yaml web-prototype/pnpm-workspace.yaml ./
@@ -46,6 +47,17 @@ COPY --from=ssb64-runtime /index.html /BattleShip.js /BattleShip.wasm /manifest.
 COPY --from=ssb64-runtime /files /workspace/ssb64-runtime/files
 COPY --from=ssb64-runtime /torch /workspace/ssb64-runtime/torch
 RUN node infra/pilot-site.mjs check-runtime /workspace/ssb64-runtime
+
+# Generic emulator payloads contain no ISO or game-derived executable. The
+# named context is already a verified manifest-only package, checked again here.
+FROM site AS with-melee-browser
+COPY --from=melee-browser-runtime / /workspace/melee-browser-runtime/
+RUN node server/melee-browser-runtime.js check /workspace/melee-browser-runtime
+
+# Include both engines explicitly so adding browser Melee retains Smash64.
+FROM with-ssb64 AS with-games
+COPY --from=melee-browser-runtime / /workspace/melee-browser-runtime/
+RUN node server/melee-browser-runtime.js check /workspace/melee-browser-runtime
 
 # Keep this last: an ordinary docker build creates the site-only image.
 FROM site AS pilot

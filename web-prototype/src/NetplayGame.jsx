@@ -5,6 +5,7 @@ import {hasStoredRom, storeRom, prewarmEngineArchive} from '../shared/rom-store.
 import {identifyRomFile} from './rom-validation.js';
 import './netplay.css';
 
+const MeleeStreamGame = lazy(() => import("./MeleeStreamGame.jsx"));
 const MeleeExperience = lazy(() => import('../../engines/melee/launcher/Experience.tsx'));
 
 export default function NetplayGame() {
@@ -33,7 +34,7 @@ export default function NetplayGame() {
       setSession(next);
       await next.connect();
     } catch (cause) {
-      setFailedGuestAccess(connection.current?.seat > 0 && connection.current?.room.state === 'lobby');
+      setFailedGuestAccess(connection.current?.seat > 0 && connection.current?.room.state !== 'ended' && (connection.current?.room.state === 'lobby' || connection.current?.room.mode === 'host-stream'));
       connection.current?.close();
       if (window.openSmashNetplay === connection.current) delete window.openSmashNetplay;
       connection.current = null; setSession(null); setView(null);
@@ -58,6 +59,7 @@ export default function NetplayGame() {
   // Room status and audio updates must never restart a prepared game at tick 0.
   const game = useMemo(() => {
     if (!room) return null;
+    if (room.mode === 'host-stream') return {};
     try { return room.engine === 'melee' ? {action: meleeRoomAction(room)} : {src: ssb64RoomUrl(room)}; }
     catch (cause) { return {error: cause.message}; }
   }, [room?.id, frozenSeats]);
@@ -65,7 +67,11 @@ export default function NetplayGame() {
   const ready = room?.players.length > 0 && room.players.every(player => player.connected && player.ready);
   const link = room ? gameLink(window.location.origin, room.engine, room.id) : window.location.href;
   async function copy() { try { await navigator.clipboard.writeText(link); setCopied(true); } catch { setStatus('Select and copy the game link below.'); } }
-  function leave() { session?.close(); window.location.assign(room?.engine === 'melee' ? '/melee' : '/'); }
+  function leave() { if (session?.seat > 0) forgetAccess(id); session?.close(); window.location.assign(room?.engine === 'melee' ? '/melee' : '/'); }
+  function rejoin() {
+    forgetAccess(id); session?.close(); connection.current = null; delete window.openSmashNetplay;
+    setSession(null); setView(null); setError(''); setFailedGuestAccess(false);
+  }
   function command(method) { setError(''); session[method]().catch(cause => setError(cause.message)); }
   // Frame errors are emitted by the patched engine bridge. A preparation
   // failure must also end the session so the other players do not wait forever.
@@ -88,7 +94,7 @@ export default function NetplayGame() {
     return () => { clearInterval(timer); document.removeEventListener('visibilitychange', update); };
   }, [active, room?.engine, soundOn]);
   let engineContent = null;
-  if (active) {
+  if (active && room.mode !== 'host-stream') {
     try {
       if (game.error) throw Error(game.error);
       engineContent = room.engine === 'melee'
@@ -98,6 +104,7 @@ export default function NetplayGame() {
             <input aria-label="Smash 64 ROM" type="file" accept=".z64,.n64,.v64,.zip" onChange={chooseRom}/></section>;
     } catch (cause) { engineContent = <p role="alert">{cause.message}</p>; }
   }
+  if (room?.mode === "host-stream") return <Suspense fallback={<main>Loading game stream…</main>}><MeleeStreamGame session={session} view={view} onLeave={leave} onRejoin={rejoin}/></Suspense>;
   return <main className="netplay-page">
     <header className="netplay-header"><a href="/">OpenSmash</a><span>Play together</span><button onClick={leave}>Leave game</button></header>
     <section className="netplay-room" aria-labelledby="room-title">

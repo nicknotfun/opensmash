@@ -1647,6 +1647,7 @@ export default function App() {
         )}
         <label className="experience-selector">Experience<select aria-label="Experience" value={isMelee?'melee':'ssb64'} onChange={e=>{
           if(engine && !window.confirm('Leave the current game and switch experiences?'))return;
+          if (e.target.value === 'melee' && !meleeDesktop() && !window.openSmashDesktop) {window.location.assign('/melee'); return;}
           window.history.pushState({}, '', e.target.value==='melee'?'/melee':'/');
           syncExperience();
         }}><option value="ssb64">Smash 64</option><option value="melee">Melee</option></select></label>

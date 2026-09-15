@@ -284,4 +284,111 @@ func TestWebTransportQUICMatchAndDisconnect(t *testing.T) {
 	}
 	_ = p1.session.CloseWithError(0, "disconnect test")
 	p0.event(t, "ended")
+
+	// The same real transport must carry SDP larger than the old 4 KiB input
+	// limit, authenticate answers, and admit replacement streaming guests.
+	streamHost := post("/v1/rooms", map[string]any{"engine": "melee", "mode": "host-stream", "config": map[string]any{"seed": 55}})
+	streamGuest := post("/v1/rooms/"+streamHost.Room.ID+"/join", map[string]any{"name": "Viewer"})
+	q0, q1 := connect(streamHost), connect(streamGuest)
+	q0.send(t, offer(1, 1, negotiationID))
+	event := q1.event(t, "signal")
+	if string(event["from"]) != "0" || string(event["generation"]) != "1" || string(event["toGeneration"]) != "1" {
+		t.Fatal("bad signal identity")
+	}
+	q1.send(t, answer(1, negotiationID))
+	event = q0.event(t, "signal")
+	if string(event["from"]) != "1" {
+		t.Fatal("bad answer identity")
+	}
+	largeOffer := offer(1, 1, strings.Repeat("a", 32))
+	largeOffer.Signal.Description.SDP = "v=0\r\n" + strings.Repeat("a", 16*1024)
+	q0.send(t, largeOffer)
+	event = q1.event(t, "signal")
+	var received signalMessage
+	if err := json.Unmarshal(event["signal"], &received); err != nil || received.Description == nil || received.Description.SDP != largeOffer.Signal.Description.SDP {
+		t.Fatal("large SDP failed roundtrip")
+	}
+	q0.send(t, map[string]any{"type": "prepare"})
+	q0.send(t, map[string]any{"type": "ready"})
+	q0.send(t, map[string]any{"type": "start"})
+	q0.event(t, "start")
+	q1.event(t, "start")
+	_ = q1.session.CloseWithError(0, "stream guest left")
+	for {
+		event = q0.event(t, "room")
+		var view roomView
+		_ = json.Unmarshal(event["room"], &view)
+		if len(view.Players) == 1 {
+			if view.State != "running" {
+				t.Fatal("stream guest ended match")
+			}
+			break
+		}
+	}
+	replacement := post("/v1/rooms/"+streamHost.Room.ID+"/join", map[string]any{"name": "Replacement"})
+	q2 := connect(replacement)
+	q0.send(t, offer(1, 1, negotiationID))
+	event = q0.event(t, "error")
+	if string(event["code"]) != `"stale_generation"` {
+		t.Fatalf("stale offer accepted: %s", event["code"])
+	}
+	q0.send(t, offer(1, 2, negotiationID))
+	q2.event(t, "signal")
+	_ = q0.session.CloseWithError(0, "stream host left")
+	q2.event(t, "ended")
+}
+
+func TestRESTStreamModeAndCredentialAuthorization(t *testing.T) {
+	h := newHub()
+	s, err := newRelayServer(h, &tls.Config{}, []string{testOrigin})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := func(path string, body any, origin string) *httptest.ResponseRecorder {
+		t.Helper()
+		data, _ := json.Marshal(body)
+		req := httptest.NewRequest("POST", path, bytes.NewReader(data))
+		req.Header.Set("Origin", origin)
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, req)
+		return w
+	}
+	for _, mode := range []string{"invalid", "host-stream"} {
+		w := request("/v1/rooms", map[string]any{"engine": "ssb64", "mode": mode, "config": map[string]any{"seed": 1}}, testOrigin)
+		if w.Code != 400 {
+			t.Fatalf("invalid mode accepted: %d", w.Code)
+		}
+	}
+	w := request("/v1/rooms", map[string]any{"engine": "melee", "mode": "host-stream", "config": map[string]any{"seed": 1}}, testOrigin)
+	if w.Code != 201 {
+		t.Fatalf("stream create: %s", w.Body.String())
+	}
+	var r reservation
+	if err := json.Unmarshal(w.Body.Bytes(), &r); err != nil {
+		t.Fatal(err)
+	}
+	path := "/v1/rooms/" + r.Room.ID + "/authorize"
+	if w := request(path, map[string]string{"token": r.Token}, testOrigin); w.Code != 403 {
+		t.Fatal("unconnected capability authorized")
+	}
+	p := mustAttach(t, h, r)
+	w = request(path, map[string]string{"token": r.Token}, testOrigin)
+	if w.Code != 200 || strings.Contains(w.Body.String(), r.Token) {
+		t.Fatalf("authorization leaked or failed: %s", w.Body.String())
+	}
+	var a streamAuthorization
+	if err := json.Unmarshal(w.Body.Bytes(), &a); err != nil || a.Mode != "host-stream" || a.Seat != 0 || !a.Connected || a.Generation != 1 {
+		t.Fatalf("authorization reply: %+v %v", a, err)
+	}
+	if w := request(path, map[string]string{"token": r.Token}, ""); w.Code != 403 {
+		t.Fatal("authorization omitted origin")
+	}
+	if w := request(path, map[string]string{"token": r.Token, "seat": "0"}, testOrigin); w.Code != 400 {
+		t.Fatal("authorization accepted spoofed field")
+	}
+	h.Detach(p)
+	if w := request(path, map[string]string{"token": r.Token}, testOrigin); w.Code != 403 {
+		t.Fatal("ended capability authorized")
+	}
 }

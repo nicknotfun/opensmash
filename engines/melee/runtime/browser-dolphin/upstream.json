@@ -1,0 +1,30 @@
+{
+  "repository": "https://github.com/dougchansan/wasm-dolphin",
+  "revision": "7e38409ace3dda709c178312ff63fd92a3653cc7",
+  "dolphinRevision": "e22551eae1c84a7e4d0b6a5c519ef4ed4ef69df1",
+  "baselineWasmSha256": "d7395b3a94080f5b7d08a0522f59096007419d117b7b0eb868246429adee6f5c",
+  "patchedSources": {
+    "core/upstream/dolphin_web_core.cpp": "88a405cd153b06c285479d4b5725820f18b945d253c7e7d89fb9aed04c8dc1b6",
+    "core/upstream/dolphin_web_discio.cpp": "0b5f294ff9c232150b5c0652c1423f59a20f7ceefaff97bf44f23b65fe659343",
+    "src/core-host.js": "b4d3954b42c6cc727c2538d90f34ba20cc032050beec64edff59123d69a50e24",
+    "src/upstream-worker-adapter.js": "6cd08cdf2c98ba89bdec655d0e2ba7b97b7329a01b6a52b4daf674ab608017a7",
+    "src/upstream-discio-worker.js": "ab10509fbc3d7a3daf493531b8b8cde165fc61341995a22ed1f65836718d2e46"
+  },
+  "buildInputs": {
+    "provenance/dolphin-source.lock.json": "fe5ef1bd590bf0a2d334274880e0e85411ac50b966cb5235ae1de89b5629ff2c",
+    "provenance/dolphin-vendor-snapshot-v1.json": "6d75bc3014904311b38bf2e3c8b284aaf8a8162294c85912ef01f1a54d82f668",
+    "tools/jit-cache-prejs.js": "387202bfdf5608f36d7e25a24c44a0089e458b5c1174aa4b31da0a5acb00499f",
+    "tools/naga-spirv-wgsl/Cargo.lock": "1f9dbc6ae36abff7af42626c17fb899275bcd7e134d36ec24a78ef79c8c4ce78",
+    "tools/naga-spirv-wgsl/Cargo.toml": "34a75354d88e4eca3a187f5448862c5779fba12ed715dc02149fbfcc0d6573a0",
+    "tools/naga-spirv-wgsl/src/lib.rs": "8e1957b21099a570a8de30a6574bd200f87f79bce15959bac1a9d85c6d6c8b0d",
+    "tools/naga-spirv-wgsl/.cargo/config.toml": "3ef73f363df3091613d8fe90119fb0d9230f2c02545d7dee2fe9dbfaab469ce8"
+  },
+  "linuxToolchain": {
+    "emscripten": "5.0.7",
+    "cmake": "3.31.10",
+    "ninja": "1.13.2",
+    "rustCommit": "7c3c88f42ad444f4688b865591d84660be4ece2f",
+    "rustToolchain": "nightly-2026-05-15",
+    "cargo": "1.97.0-nightly"
+  }
+}

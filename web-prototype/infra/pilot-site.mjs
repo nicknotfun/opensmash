@@ -57,9 +57,17 @@ export function siteConfiguration(config) {
       JOB_DATABASE: "firestore", OBJECT_STORE: "gcs", HANDOFF_ROOMS: "firestore",
       GCS_PRIVATE_BUCKET: privateBucket, GCS_PUBLIC_BUCKET: publicBucket,
       OPENSMASH_NETPLAY_URL: httpsUrl(config.relayOrigin, "relayOrigin", true),
-      MELEE_SERVICE_ORIGIN: httpsUrl(config.meleeServiceOrigin, "meleeServiceOrigin", true),
     });
-    secrets.MELEE_SERVICE_TOKEN = secretReference(config.meleeServiceToken, "meleeServiceToken (Secret Manager name:version)");
+    // Browser-hosted Melee needs only room signaling. Keep the legacy service
+    // optional for deployments that still offer custom server-built fighters.
+    if (config.meleeServiceOrigin !== undefined || config.meleeServiceToken !== undefined) {
+      environment.MELEE_SERVICE_ORIGIN = httpsUrl(config.meleeServiceOrigin, "meleeServiceOrigin", true);
+      secrets.MELEE_SERVICE_TOKEN = secretReference(config.meleeServiceToken, "meleeServiceToken (Secret Manager name:version)");
+    }
+    if (config.cloudflareTurnKeyId !== undefined || config.cloudflareTurnSecret !== undefined) {
+      environment.CLOUDFLARE_TURN_KEY_ID = text(config.cloudflareTurnKeyId, "cloudflareTurnKeyId", /^[a-f0-9]{32}$/);
+      secrets.CLOUDFLARE_TURN_KEY_API_TOKEN = secretReference(config.cloudflareTurnSecret, "cloudflareTurnSecret (Secret Manager name:version)");
+    }
     if (config.fighterWorkerOrigin) {
       secrets.OPENAI_API_KEY = secretReference(config.openaiSecret, "openaiSecret (Secret Manager name:version; required for submission moderation)");
       environment.FIGHTER_EXECUTION_MODE = "cloud-run-service";
@@ -67,7 +75,7 @@ export function siteConfiguration(config) {
       environment.FIGHTER_MODERATION_ENABLED = "1";
       environment.CREATION_ENABLED = "1";
     }
-  } else if (config.relayOrigin || config.meleeServiceOrigin || config.fighterWorkerOrigin) {
+  } else if (config.relayOrigin || config.meleeServiceOrigin !== undefined || config.meleeServiceToken !== undefined || config.fighterWorkerOrigin || config.cloudflareTurnKeyId !== undefined || config.cloudflareTurnSecret !== undefined) {
     throw Error("Service origins require mode=full and durable stores.");
   }
   return {projectId, region, siteOrigin, mode, environment, secrets};

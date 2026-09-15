@@ -152,6 +152,7 @@ func (s *relayServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/v1/rooms" && r.Method == http.MethodPost {
 		var body struct {
 			Engine string          `json:"engine"`
+			Mode   string          `json:"mode"`
 			Config json.RawMessage `json:"config"`
 			Name   string          `json:"name"`
 		}
@@ -159,7 +160,7 @@ func (s *relayServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeError(w, err)
 			return
 		}
-		v, err := s.hub.Create(body.Engine, body.Config, body.Name, address)
+		v, err := s.hub.CreateMode(body.Engine, body.Mode, body.Config, body.Name, address)
 		if err != nil {
 			writeError(w, err)
 			return
@@ -171,6 +172,22 @@ func (s *relayServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if len(parts) >= 3 && parts[0] == "v1" && parts[1] == "rooms" && len(parts[2]) == 32 {
 		if len(parts) == 3 && r.Method == http.MethodGet {
 			v, err := s.hub.Snapshot(parts[2])
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			writeJSON(w, 200, v)
+			return
+		}
+		if len(parts) == 4 && parts[3] == "authorize" && r.Method == http.MethodPost {
+			var body struct {
+				Token string `json:"token"`
+			}
+			if err := bodyJSON(w, r, &body); err != nil {
+				writeError(w, err)
+				return
+			}
+			v, err := s.hub.AuthorizeStream(parts[2], body.Token)
 			if err != nil {
 				writeError(w, err)
 				return
@@ -266,7 +283,7 @@ func (s *relayServer) connect(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 	scanner := bufio.NewScanner(stream)
-	scanner.Buffer(make([]byte, 1024), 4096)
+	scanner.Buffer(make([]byte, 1024), maxSignalBytes)
 	window := time.Now()
 	count := 0
 	for {
@@ -287,10 +304,18 @@ func (s *relayServer) connect(w http.ResponseWriter, r *http.Request) {
 			c.send(map[string]any{"type": "error", "code": "invalid_message", "message": "Malformed or unknown message fields."})
 			continue
 		}
+		if message.Type != "signal" && len(scanner.Bytes()) >= 4096 {
+			c.send(map[string]any{"type": "error", "code": "invalid_message", "message": "Non-signaling messages must be smaller than 4 KiB."})
+			continue
+		}
 		if err := s.hub.Message(c, message); err != nil {
 			var e *protocolError
 			if errors.As(err, &e) {
-				c.send(map[string]any{"type": "error", "code": e.Code, "message": e.Message})
+				reply := map[string]any{"type": "error", "code": e.Code, "message": e.Message}
+				if message.Type == "signal" {
+					reply["request"] = "signal"
+				}
+				c.send(reply)
 			} else {
 				return
 			}

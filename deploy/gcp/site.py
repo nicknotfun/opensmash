@@ -56,7 +56,7 @@ def source_files(repo):
     return selected
 
 
-def stage_source(repo, destination, names, runtime=None):
+def stage_source(repo, destination, names, runtime=None, melee_runtime=None):
     digest = hashlib.sha256()
     for name in names:
         data = (repo / name).read_bytes()
@@ -64,8 +64,12 @@ def stage_source(repo, destination, names, runtime=None):
         target = destination / name
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
-    if runtime:
-        runtime_root, runtime_names = runtime
+    for prefix, payload in (("ssb64-runtime", runtime), ("melee-browser-runtime", melee_runtime)):
+        if not payload:
+            continue
+        runtime_root, runtime_names = payload
+        if runtime_root.is_symlink() or not runtime_root.is_dir():
+            raise ValueError("Runtime root changed or became a symlink before staging.")
         for name in runtime_names:
             filename = runtime_root / name
             if not filename.is_file() or filename.is_symlink() or not filename.resolve().is_relative_to(runtime_root.resolve()):
@@ -76,7 +80,7 @@ def stage_source(repo, destination, names, runtime=None):
                 if parent.is_symlink():
                     raise ValueError(f"Runtime directory became a symlink: {name}")
             data = filename.read_bytes()
-            relative = "ssb64-runtime/" + name
+            relative = prefix + "/" + name
             digest.update(relative.encode() + b"\0" + hashlib.sha256(data).digest())
             target = destination / relative
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -108,13 +112,24 @@ def validated_runtime(repo, runtime_root):
     return sorted(names)
 
 
+def validated_melee_runtime(repo, runtime_root):
+    result = subprocess.run(["node", str(repo / "web-prototype/server/melee-browser-runtime.js"), "check", str(runtime_root)],
+                            check=False, capture_output=True, text=True)
+    if result.returncode:
+        raise ValueError("Melee browser runtime preflight failed: " + result.stderr.strip())
+    data = json.loads(result.stdout)
+    if data.get("controllerPorts") != 4 or data.get("containsGameData") is not False or not isinstance(data.get("files"), list):
+        raise ValueError("Melee browser runtime preflight returned an invalid capability.")
+    return data["files"]
+
+
 def validated_config(repo, config_file):
     script = "import {readFileSync} from 'node:fs';import {siteConfiguration} from './web-prototype/infra/pilot-site.mjs';console.log(JSON.stringify(siteConfiguration(JSON.parse(readFileSync(process.argv[1],'utf8')))));"
     result = subprocess.run(["node", "--input-type=module", "-e", script, str(config_file.resolve())], cwd=repo, check=True, capture_output=True, text=True)
     return json.loads(result.stdout), json.loads(config_file.read_text())
 
 
-def deployment_plan(config, raw, source="<staged-source>", private="<private-inputs>", tag="<source-sha>", with_runtime=False):
+def deployment_plan(config, raw, source="<staged-source>", private="<private-inputs>", tag="<source-sha>", with_runtime=False, with_melee_runtime=False):
     project, region = config["projectId"], config["region"]
     api = f"opensmash-api@{project}.iam.gserviceaccount.com"
     builder = f"opensmash-site-build@{project}.iam.gserviceaccount.com"
@@ -209,17 +224,24 @@ def deployment_plan(config, raw, source="<staged-source>", private="<private-inp
     run("run", "services", "describe", service, f"--region={region}", "--format=value(status.url)")
     build = {"steps": [{"name": "gcr.io/cloud-builders/docker", "args": ["build", "--file", "web-prototype/docker/pilot-api.Dockerfile", "--target", "pilot", "--tag", image, "."], "env": ["DOCKER_BUILDKIT=1"]}],
              "images": [image], "options": {"logging": "CLOUD_LOGGING_ONLY"}, "timeout": "1800s"}
-    if with_runtime:
+    if with_runtime or with_melee_runtime:
         # Use an explicit recent Buildx client and its own BuildKit daemon;
         # Cloud Build's legacy Docker builder may lack named-context support.
         # /workspace is shared across steps. Store the client-side builder
         # registration there rather than depending on an image's HOME setting.
         buildx_env = ["BUILDX_CONFIG=/workspace/.opensmash-buildx"]
+        target = "with-games" if with_runtime and with_melee_runtime else "with-ssb64" if with_runtime else "with-melee-browser"
+        contexts = []
+        if with_runtime:
+            contexts.extend(["--build-context", "ssb64-runtime=./ssb64-runtime"])
+        if with_melee_runtime:
+            contexts.extend(["--build-context", "melee-browser-runtime=./melee-browser-runtime"])
         build["steps"] = [
             {"name": "docker:28-cli", "entrypoint": "docker", "env": buildx_env, "args": ["buildx", "create", "--name", "opensmash", "--driver", "docker-container", "--use"]},
-            {"name": "docker:28-cli", "entrypoint": "docker", "env": buildx_env, "args": ["buildx", "build", "--builder", "opensmash", "--load", "--file", "web-prototype/docker/pilot-api.Dockerfile", "--target", "with-ssb64", "--build-context", "ssb64-runtime=./ssb64-runtime", "--tag", image, "."]},
+            {"name": "docker:28-cli", "entrypoint": "docker", "env": buildx_env, "args": ["buildx", "build", "--builder", "opensmash", "--load", "--file", "web-prototype/docker/pilot-api.Dockerfile", "--target", target, *contexts, "--tag", image, "."]},
         ]
     return {"projectId": project, "region": region, "image": image, "operations": operations, "cloudBuild": build,
+            "meleeBrowserRuntime": {"included": with_melee_runtime, "requirement": "--melee-browser-runtime requires a hash-verified generic four-controller browser build; no ISO or game workspace is uploaded."},
             "runtime": {"included": with_runtime, "requirement": "--ssb64-runtime pointing to a locally validated patched web-dist is required to include the SSB64 engine; full service config alone does not include a game."}}
 
 
@@ -331,6 +353,7 @@ def main():
     parser.add_argument("--region", required=True)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[2])
     parser.add_argument("--ssb64-runtime", type=Path, help="Optional patched web-dist; validated and hashed before upload. No ROM/disc/archive or symlink is accepted.")
+    parser.add_argument("--melee-browser-runtime", type=Path, help="Optional generic four-controller browser runtime; entire manifest, hashes and Wasm exports are validated before upload. No game data or symlinks accepted.")
     parser.add_argument("--apply", action="store_true", help="Run the displayed plan against GCP; without this flag no cloud calls occur.")
     args = parser.parse_args()
     repo = args.repo.resolve()
@@ -341,20 +364,26 @@ def main():
     if args.ssb64_runtime:
         runtime_root = args.ssb64_runtime.absolute()
         runtime = (runtime_root, validated_runtime(repo, runtime_root))
+    melee_runtime = None
+    if args.melee_browser_runtime:
+        melee_root = args.melee_browser_runtime.absolute()
+        melee_runtime = (melee_root, validated_melee_runtime(repo, melee_root))
     names = source_files(repo)
     if not args.apply:
-        print(json.dumps({**deployment_plan(config, raw, with_runtime=runtime is not None), "sourceFiles": names, "runtimeFiles": runtime[1] if runtime else []}, indent=2))
+        print(json.dumps({**deployment_plan(config, raw, with_runtime=runtime is not None, with_melee_runtime=melee_runtime is not None), "sourceFiles": names, "runtimeFiles": runtime[1] if runtime else [], "meleeBrowserRuntimeFiles": melee_runtime[1] if melee_runtime else []}, indent=2))
         return
     with tempfile.TemporaryDirectory(prefix="opensmash-site-deploy-") as temporary:
         work = Path(temporary)
         source, private = work / "source", work / "private"
         source.mkdir()
         private.mkdir(mode=0o700)
-        tag = stage_source(repo, source, names, runtime)
+        tag = stage_source(repo, source, names, runtime, melee_runtime)
         if runtime:
             # Recheck the copied bytes to catch any input changes during staging.
             validated_runtime(repo, source / "ssb64-runtime")
-        plan = deployment_plan(config, raw, str(source), str(private), tag, with_runtime=runtime is not None)
+        if melee_runtime:
+            validated_melee_runtime(repo, source / "melee-browser-runtime")
+        plan = deployment_plan(config, raw, str(source), str(private), tag, with_runtime=runtime is not None, with_melee_runtime=melee_runtime is not None)
         (private / "cloudbuild.json").write_text(json.dumps(plan["cloudBuild"]))
         (private / "env.json").write_text(json.dumps(config["environment"]))
         (private / "cors.json").write_text(json.dumps([{"origin": [config["siteOrigin"]], "method": ["GET", "HEAD"], "responseHeader": ["Content-Type", "Content-Encoding", "Cache-Control", "ETag"], "maxAgeSeconds": 3600}]))

@@ -24,6 +24,8 @@ import {
 import { CREATION_DISABLED_MESSAGE, creationEnabled } from "./creation-switch.js";
 import { withInitialState } from "./html-state.js";
 import { withControllerRemap } from "./engine-html.js";
+import { createMeleeBrowserRuntime } from "./melee-browser-runtime.js";
+import { createNetplayIce } from "./netplay-ice.js";
 import { netplayConfig } from "./netplay-config.js";
 import { resolveProjectPaths } from "./project-paths.js";
 import { assignRosterBases, bundleForBase, FIGHTERS, readOsb6Targets } from "./roster.js";
@@ -42,6 +44,7 @@ const {
   pipelineUiRoot: PIPELINE_UI_ROOT,
 } = resolveProjectPaths(APP_ROOT);
 const DIST_ROOT = path.join(APP_ROOT, "dist");
+const browserMelee = await createMeleeBrowserRuntime({indexFile: path.join(process.env.NODE_ENV === "production" ? DIST_ROOT : path.join(APP_ROOT, "public"), "melee-browser-host.html")});
 const APP_SHELL_PATHS = new Set([
   "/",
   "/melee",
@@ -79,7 +82,7 @@ const ENGINE_SECURITY_HEADERS = Object.freeze({
 });
 
 function securityHeaders(pathname) {
-  return pathname.startsWith("/engine/") ? ENGINE_SECURITY_HEADERS : APP_SECURITY_HEADERS;
+  return (pathname.startsWith("/engine/") || pathname.startsWith("/melee/browser-runtime/")) ? ENGINE_SECURITY_HEADERS : APP_SECURITY_HEADERS;
 }
 const PIPELINE_PLAY_ROOT = path.join(PIPELINE_PROJECT_ROOT, "play");
 const OG_SPRITE_SCRIPT = path.join(PIPELINE_PROJECT_ROOT, "pipeline", "og_sprite.py");
@@ -214,6 +217,7 @@ function finishTrailerCapture(inputPath, outputPath) {
 const handoffRooms = await createHandoffRoomsFromEnv();
 // TURN relay credentials for the handoff (STUN-only when unconfigured).
 const handoffIce = createIceServerProvider();
+const netplayIce = createNetplayIce({relayUrl: publicNetplayConfig.relayUrl, publicOrigin: process.env.PUBLIC_ORIGIN, provider: handoffIce});
 const ROM_VALIDATION_WINDOW_MS = 15 * 60 * 1000;
 const ROM_VALIDATION_LIMIT = Number(process.env.ROM_VALIDATION_LIMIT || 10);
 const romValidationAttempts = new Map();
@@ -809,9 +813,17 @@ async function handleRequest(req, res, vite) {
   res.setHeader('Cross-Origin-Opener-Policy','same-origin');
   res.setHeader('Cross-Origin-Embedder-Policy','credentialless');
 
+  if (await browserMelee.handle(req, res)) return;
+
   if (pathname === '/api/netplay/config' && req.method === 'GET') {
     res.setHeader('Cache-Control', 'no-store');
     return json(res, 200, publicNetplayConfig);
+  }
+
+  if (pathname === '/api/netplay/ice' && req.method === 'POST') {
+    if (!mutationOriginAllowed(req)) return json(res, 403, {error: 'Request origin is not allowed'});
+    try { return json(res, 200, await netplayIce(await readJsonBody(req)), {'Cache-Control': 'no-store'}); }
+    catch (error) { return json(res, error.status || 503, {error: error.message || 'Could not connect video.'}, {'Cache-Control': 'no-store'}); }
   }
 
   // Firebase's hosted sign-in helper, served from our origin (see auth.js).

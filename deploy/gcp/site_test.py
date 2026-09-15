@@ -1,3 +1,4 @@
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -53,6 +54,17 @@ class PlanTests(unittest.TestCase):
         self.assertTrue(with_runtime["runtime"]["included"])
         for step in with_runtime["cloudBuild"]["steps"]:
             self.assertIn("BUILDX_CONFIG=/workspace/.opensmash-buildx", step["env"])
+
+    def test_browser_melee_named_context_can_be_combined_without_dropping_smash64(self):
+        for ssb64 in (False, True):
+            plan = site.deployment_plan(config(True), {}, with_runtime=ssb64, with_melee_runtime=True)
+            build = plan["cloudBuild"]["steps"][-1]["args"]
+            self.assertEqual(build[build.index("--target") + 1], "with-games" if ssb64 else "with-melee-browser")
+            self.assertIn("melee-browser-runtime=./melee-browser-runtime", build)
+            self.assertEqual("ssb64-runtime=./ssb64-runtime" in build, ssb64)
+            self.assertTrue(plan["meleeBrowserRuntime"]["included"])
+            self.assertEqual(plan["runtime"]["included"], ssb64)
+        self.assertFalse(site.deployment_plan(config(True), {})["meleeBrowserRuntime"]["included"])
 
     def test_full_mode_grants_assets_and_secrets_at_resource_scope(self):
         plan = site.deployment_plan(config(True, True), {"fighterWorkerService": "fighter-worker"})
@@ -168,6 +180,69 @@ class RuntimeTests(unittest.TestCase):
             (root / "torch/module.js").write_text("changed runtime")
             self.assertNotEqual(site.stage_source(repo, target, [], (root, names)), tag)
             self.assertEqual(site.validated_runtime(self.repo, target / "ssb64-runtime"), names)
+
+
+def melee_runtime_fixture(root):
+    exports = [b"OpenSmashControllerPorts", b"SetControllerState", b"OpenSmashReadController"]
+    section = bytes([len(exports)]) + b"".join(bytes([len(name)]) + name + bytes([0, 0]) for name in exports)
+    wasm = bytes([0, 97, 115, 109, 1, 0, 0, 0, 1, 5, 1, 96, 0, 1, 127, 3, 2, 1, 0, 7, len(section)]) + section + bytes([10, 6, 1, 4, 0, 65, 4, 11])
+    core = "cores/dolphin/dolphin-core-upstream"
+    revision = "7e38409ace3dda709c178312ff63fd92a3653cc7"
+    names = ["src/core-host.js", "src/upstream-worker-adapter.js", "src/upstream-discio-worker.js", "src/upstream-worker-protocol.js", "src/audio.js", "LICENSE", "SOURCE.md", "provenance/dolphin-core-abi-v1.json"]
+    files = {name: b"fixture" for name in names}
+    files[core + ".js"], files[core + ".wasm"] = b"generic runtime", wasm
+    files[core + ".build.json"] = json.dumps({"revision": revision, "controllerPorts": 4, "containsGameData": False, "artifacts": {
+        "dolphin-core-upstream.wasm": hashlib.sha256(wasm).hexdigest(),
+        "dolphin-core-upstream.js": hashlib.sha256(files[core + ".js"]).hexdigest(),
+    }}).encode()
+    root.mkdir()
+    for name, data in files.items():
+        filename = root / name
+        filename.parent.mkdir(parents=True, exist_ok=True)
+        filename.write_bytes(data)
+    manifest = {"protocol": 1, "engine": "melee", "runtime": "wasm-dolphin", "revision": revision, "controllerPorts": 4,
+                "containsGameData": False, "sharedMemoryBytes": 1610612736,
+                "files": {name: hashlib.sha256(data).hexdigest() for name, data in files.items()}}
+    (root / "manifest.json").write_text(json.dumps(manifest))
+
+
+class MeleeBrowserRuntimeTests(unittest.TestCase):
+    repo = Path(__file__).resolve().parents[2]
+
+    def test_real_preflight_and_combined_staging_preserve_both_engine_payloads(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            melee, ssb64, repo, output = base / "melee", base / "ssb64", base / "repo", base / "upload"
+            melee_runtime_fixture(melee)
+            runtime_fixture(ssb64)
+            repo.mkdir()
+            output.mkdir()
+            melee_names = site.validated_melee_runtime(self.repo, melee)
+            ssb64_names = site.validated_runtime(self.repo, ssb64)
+            tag = site.stage_source(repo, output, [], (ssb64, ssb64_names), (melee, melee_names))
+            self.assertEqual(len(tag), 24)
+            self.assertTrue((output / "ssb64-runtime/BattleShip.wasm").is_file())
+            self.assertTrue((output / "melee-browser-runtime/cores/dolphin/dolphin-core-upstream.wasm").is_file())
+            self.assertEqual(site.validated_melee_runtime(self.repo, output / "melee-browser-runtime"), melee_names)
+            (melee / "src/audio.js").write_text("changed")
+            with self.assertRaisesRegex(ValueError, "checksum"):
+                site.validated_melee_runtime(self.repo, melee)
+
+    def test_generic_runtime_preflight_blocks_game_files_and_symlinks_before_cloud_calls(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "runtime"
+            melee_runtime_fixture(root)
+            (root / "game.iso").write_text("private fixture")
+            argv = ["site.py", "--project", "test-smash-project", "--region", "us-central1", "--config", "unused.json", "--melee-browser-runtime", str(root), "--apply"]
+            with mock.patch.object(site.sys, "argv", argv), mock.patch.object(site, "validated_config", return_value=(config(True), {})), mock.patch.object(site, "execute") as execute:
+                with self.assertRaisesRegex(ValueError, "Melee browser runtime preflight failed"):
+                    site.main()
+                execute.assert_not_called()
+            (root / "game.iso").unlink()
+            link = Path(temporary) / "link"
+            link.symlink_to(root)
+            with self.assertRaisesRegex(ValueError, "symlink"):
+                site.validated_melee_runtime(self.repo, link)
 
 
 class ExecutionTests(unittest.TestCase):
