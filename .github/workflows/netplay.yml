@@ -2,7 +2,7 @@ name: Multiplayer checks
 on:
   pull_request:
   push:
-    branches: [codex/webtransport-multiplayer]
+    branches: [main, codex/webtransport-multiplayer]
 
 permissions:
   contents: read
