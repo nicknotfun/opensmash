@@ -14,11 +14,27 @@ let introSamples=[],introLastFrame=0,introStarted=0,introReported=false;
 let preparationSamples=[], preparationLastFrame=0, preparationReleased=false, preparationStarted=0, preparationFailed=false;
 const costumeSizes=new Map();
 let runtimeBuild, startOptions, activeSelection, readyForSelection = false;
+let online = false, netplayHelpers;
 const report = (type, data) => {
   postMessage({type, sessionId, ...data});
-  if (type !== 'metrics') fetch(apiPrefix+'/api/debug', {method:'POST', headers:{'Content-Type':'application/json'},body:JSON.stringify({time:Date.now(),type,sessionId,...data})}).catch(()=>{});
+  if (type !== 'metrics' && type !== 'netplay-needed') fetch(apiPrefix+'/api/debug', {method:'POST', headers:{'Content-Type':'application/json'},body:JSON.stringify({time:Date.now(),type,sessionId,...data})}).catch(()=>{});
 };
 self.onmessage = async ({data}) => {
+  if (data.type === 'netplay-frame') {
+    try {
+      if (!online || !engine) throw Error('Multiplayer has not started.');
+      netplayHelpers.validateFrame(data.frame, data.pads);
+      const pointer = engine._opensmash_netplay_input_buffer() >>> 2;
+      engine.HEAPU32.set(data.pads.flat(), pointer);
+      if (engine._opensmash_netplay_submit(data.frame) !== 0)
+        throw Error('Multiplayer received an out-of-order frame.');
+    } catch (error) {
+      engine?._opensmash_netplay_stop?.();
+      report('error', {message:error.message||String(error)});
+    }
+    return;
+  }
+  if (data.type === 'netplay-stop') { engine?._opensmash_netplay_stop?.(); return; }
   if (data.type === 'select') {
     try {
       if (!engine || !readyForSelection) throw Error('The engine is not ready for a selection.');
@@ -48,16 +64,18 @@ self.onmessage = async ({data}) => {
       COSTUME_SLOTS.forEach((name,i)=>engine._opensmash_costume_size(i,costumeSizes.get(name)));
       const s=data.launch;
       engine._opensmash_configure_launch(s.mode,s.stage,s.level,s.stocks,s.minutes,...s.packedPorts);
-    } catch(error) { report('error',{message:error.message||String(error)}); }
+    } catch(error) { report('error',{message:error.message||String(error)}); if(online)throw error; }
     return;
   }
   if (data.type === 'confirm') {
+    if (online) return; // The page includes this button in its synchronized pad.
     if(combatReached && activeSelection?.launch?.mode===0 && !preparationReleased)return;
     pulseUntil=performance.now()+150;
     engine?._opensmash_set_pad(0, 0x100, 0x80808080, 0, 1);
     return;
   }
   if (data.type === 'pad') {
+    if (online) return; // Online input can only enter through a complete frame.
     if(combatReached && activeSelection?.launch?.mode===0 && !preparationReleased)return;
     const now=performance.now(), raw=data.values[1],port=data.values[0];
     if(!Number.isInteger(port)||port<0||port>3)return;
@@ -85,6 +103,12 @@ self.onmessage = async ({data}) => {
     if(!buildResponse.ok)throw Error('The local engine build is incomplete. Finish the browser build first.');
     const build=await buildResponse.json();
     runtimeBuild=build;startOptions=data;
+    online = !!data.netplay;
+    if (online) {
+      if (!Number.isInteger(data.netplay.seed) || data.netplay.seed < 0 || data.netplay.seed > 0xffffffff || !data.selection)
+        throw Error('Invalid multiplayer launch.');
+      netplayHelpers = await import('./netplay.mjs');
+    }
     report('session',{browser:navigator.userAgent,hardwareConcurrency:navigator.hardwareConcurrency,build,mode:data.warm?'warming':data.benchmark==='1'?'cpu-benchmark':'human',skin:data.skin||'gx',character:data.character,fighter:data.fighter,profile:data.profile||'0',resolution:[960,720]});
     const {inspectDisc, ISO_SHA256} = await import('./disc.mjs');
     const {mountSizedFile, mountSystemBundle, costumeSlot, COSTUME_SLOTS} = await import('./local-files.mjs');
@@ -134,6 +158,9 @@ self.onmessage = async ({data}) => {
       onAbort: reason => report('error', {message: `Melee stopped: ${reason}`}),
       onVerifyProgress: bytes => report('status', {message: `Checking your game… ${Math.floor(bytes / data.iso.size * 100)}%`}),
     });
+    if (online && (engine._opensmash_netplay_version?.() !== 1 ||
+        engine._opensmash_netplay_enable(data.netplay.seed) !== 1))
+      throw Error('This Melee engine needs the multiplayer runtime update.');
     if(!engine._opensmash_preparation_state)preparationReleased=true;
     phase = 'mounting game files';
     report('status', {message: 'Preparing game files…'});
@@ -210,8 +237,10 @@ self.onmessage = async ({data}) => {
     }
     }
     FS.mkdir('/user');
-    FS.mount(engine.IDBFS, {autoPersist:true}, '/user');
-    await new Promise((resolve,reject)=>FS.syncfs(true,error=>error?reject(error):resolve()));
+    if (!online) {
+      FS.mount(engine.IDBFS, {autoPersist:true}, '/user');
+      await new Promise((resolve,reject)=>FS.syncfs(true,error=>error?reject(error):resolve()));
+    }
     // Compile known pipelines before the first game frame. The engine validates
     // the portable UID cache version; Chrome compiles it for this user's GPU.
     const shaderCache='/user/Cache/GALE01.uidcache';
@@ -237,13 +266,34 @@ self.onmessage = async ({data}) => {
     report('status', {message: 'Loading system resources…'});
     const bundleResponse = await fetch('./sys-bundle.bin');
     if (!bundleResponse.ok) throw Error('Melee resources could not load.');
-    mountSystemBundle(FS, await bundleResponse.arrayBuffer());
-    engine._opensmash_set_pad(0, 0, 0x80808080, 0, 1);
+    const systemBundle = await bundleResponse.arrayBuffer();
+    mountSystemBundle(FS, systemBundle);
+    if (online) {
+      for (let port=0;port<4;port++) engine._opensmash_set_pad(port,0,0x80808080,0,0);
+      readyForSelection = true;
+      await self.onmessage({data:{...data.selection, type:'select'}});
+      if (readyForSelection) throw Error('Multiplayer launch selection was not applied.');
+      preparationReleased = true;
+      const system = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',systemBundle)),b=>b.toString(16).padStart(2,'0')).join('');
+      const fingerprint = await netplayHelpers.netplayFingerprint({build,disc:ISO_SHA256,system,
+        seed:data.netplay.seed, ...data.selection});
+      report('netplay-ready', {fingerprint});
+    } else engine._opensmash_set_pad(0, 0, 0x80808080, 0, 1);
     report('status', {message: 'Starting match…'});
     const identityBytes = new TextEncoder().encode(ISO_SHA256 + (data.warm?'warm-slots-v8-roster-css':data.costume ?
       Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', await data.costume.blob.arrayBuffer())), b => b.toString(16).padStart(2, '0')).join('') : ''));
     const identity = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', identityBytes)), b => b.toString(16).padStart(2, '0')).join('');
     engine.callMain(['/game', data.renderer || 'OGL', '/user', String(data.fighter ?? 8), identity, data.profile || '0',data.benchmark||'0',data.warm?'1':'0']);
+    if (online) {
+      let lastRequest = -1;
+      setInterval(() => {
+        const frame = engine._opensmash_netplay_requested() >>> 0;
+        if (frame !== 0xffffffff && frame !== lastRequest) {
+          lastRequest = frame;
+          report('netplay-needed', {frame});
+        }
+      }, 2);
+    }
     report('started', {});
     if (data.audio) {
       const indices = new Int32Array(data.audio, 0, 4), ring = new Float32Array(data.audio, 16);
@@ -269,6 +319,7 @@ self.onmessage = async ({data}) => {
       }, 10);
     }
     setInterval(()=>{
+      if(online)return; // Shader readiness must not release gameplay per peer.
       if(preparationFailed)return;
       if(engine._opensmash_intro_state?.()===1){
         if(!introStarted){introStarted=performance.now();report('status',{message:'Preparing the matchup…'});}

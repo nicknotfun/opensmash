@@ -1,0 +1,6 @@
+.env
+*.pem
+*.key
+/relay/relay
+/tests/node_modules/
+/tests/results/

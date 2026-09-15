@@ -1,0 +1,93 @@
+diff --git a/vendor/dolphin/Source/Core/Core/HW/VideoInterface.cpp b/vendor/dolphin/Source/Core/Core/HW/VideoInterface.cpp
+--- a/vendor/dolphin/Source/Core/Core/HW/VideoInterface.cpp
++++ b/vendor/dolphin/Source/Core/Core/HW/VideoInterface.cpp
+@@ -2,6 +2,10 @@
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ 
+ #include "Core/HW/VideoInterface.h"
++
++#ifdef __EMSCRIPTEN__
++extern "C" void opensmash_netplay_frame();
++#endif
+ 
+ #include <algorithm>
+ #include <array>
+@@ -682,7 +686,14 @@
+   // in case frame counter display is enabled
+ 
+   if (is_at_field_boundary)
++  {
++#ifdef __EMSCRIPTEN__
++    // This runs on the emulated CPU, before the field and its input polls.
++    // Waiting in the renderer would let game logic run ahead independently.
++    opensmash_netplay_frame();
++#endif
+     m_system.GetMovie().FrameUpdate();
++  }
+ 
+   // If this half-line is at some boundary of the "active video lines" in either field, we either
+   // need to (a) send a request to the GPU thread to actually render the XFB, or (b) increment
+diff --git a/vendor/dolphin/Source/Core/Core/HW/EXI/EXI_DeviceIPL.cpp b/vendor/dolphin/Source/Core/Core/HW/EXI/EXI_DeviceIPL.cpp
+--- a/vendor/dolphin/Source/Core/Core/HW/EXI/EXI_DeviceIPL.cpp
++++ b/vendor/dolphin/Source/Core/Core/HW/EXI/EXI_DeviceIPL.cpp
+@@ -2,6 +2,11 @@
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ 
+ #include "Core/HW/EXI/EXI_DeviceIPL.h"
++
++#ifdef __EMSCRIPTEN__
++extern "C" unsigned opensmash_netplay_enabled();
++extern "C" unsigned opensmash_netplay_epoch();
++#endif
+ 
+ #include <cstring>
+ #include <string>
+@@ -410,6 +415,14 @@
+     // let's keep time moving forward, regardless of what it starts at
+     ltime += system.GetCoreTiming().GetTicks() / system.GetSystemTimers().GetTicksPerSecond();
+   }
++#ifdef __EMSCRIPTEN__
++  else if (opensmash_netplay_enabled())
++  {
++    // A shared seed plus emulated ticks, never a peer's wall clock.
++    ltime = opensmash_netplay_epoch();
++    ltime += system.GetCoreTiming().GetTicks() / system.GetSystemTimers().GetTicksPerSecond();
++  }
++#endif
+   else if (NetPlay::IsNetPlayRunning())
+   {
+     ltime = NetPlay_GetEmulatedTime();
+diff --git a/vendor/dolphin/Source/Core/Core/HW/EXI/EXI.cpp b/vendor/dolphin/Source/Core/Core/HW/EXI/EXI.cpp
+--- a/vendor/dolphin/Source/Core/Core/HW/EXI/EXI.cpp
++++ b/vendor/dolphin/Source/Core/Core/HW/EXI/EXI.cpp
+@@ -2,6 +2,11 @@
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ 
+ #include "Core/HW/EXI/EXI.h"
++
++#ifdef __EMSCRIPTEN__
++extern "C" unsigned opensmash_netplay_enabled();
++extern "C" unsigned opensmash_netplay_epoch();
++#endif
+ 
+ #include <array>
+ #include <memory>
+@@ -129,8 +134,16 @@
+     const CardFlashId& flash_id = sram.settings_ex.flash_id[Memcard::SLOT_A];
+     const u32 rtc_bias = sram.settings.rtc_bias;
+     const u32 sram_language = static_cast<u32>(sram.settings.language);
+-    const u64 format_time =
+-        Common::Timer::GetLocalTimeSinceJan1970() - ExpansionInterface::CEXIIPL::GC_EPOCH;
++    u64 format_seconds = Common::Timer::GetLocalTimeSinceJan1970();
++#ifdef __EMSCRIPTEN__
++    if (opensmash_netplay_enabled())
++    {
++      // Fresh card serials also depend on their format time. Peers can boot
++      // seconds apart while preparing the same match.
++      format_seconds = opensmash_netplay_epoch();
++    }
++#endif
++    const u64 format_time = format_seconds - ExpansionInterface::CEXIIPL::GC_EPOCH;
+ 
+     for (u32 i = 0; i < MAX_EXI_CHANNELS; i++)
+     {

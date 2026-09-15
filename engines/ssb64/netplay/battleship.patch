@@ -1,0 +1,51 @@
+diff --git a/port/gameloop.cpp b/port/gameloop.cpp
+index 9b0e715..4b5e2ed 100644
+--- a/port/gameloop.cpp
++++ b/port/gameloop.cpp
+@@ -768,8 +768,17 @@ static void port_screenshot_maybe_capture(int frame)
+ 	}
+ }
+ 
++extern "C" int port_netplay_enabled(void);
++extern "C" int port_netplay_before_frame(uint32_t tick);
++
+ void PortPushFrame(void)
+ {
++	/* Confirm every input before cheats, VI, controller reads or game logic. */
++	if (!port_netplay_before_frame((uint32_t)sFrameCount)) {
++		port_watchdog_note_frame_end();
++		return;
++	}
++
+ 	// Process cheats safely before the frame updates
+ 	lbBackupApplyCheats();
+ 
+@@ -789,7 +798,7 @@ void PortPushFrame(void)
+ #ifdef __EMSCRIPTEN__
+ 	/* Matchup card: hold the game (no VI tick, no coroutine resume) while
+ 	 * the shell shows who is fighting. The watchdog still sees frames. */
+-	if (port_matchup_gate()) {
++	if (!port_netplay_enabled() && port_matchup_gate()) {
+ 		port_watchdog_note_frame_end();
+ 		return;
+ 	}
+diff --git a/port/port.cpp b/port/port.cpp
+index 24b78db..33d5f33 100644
+--- a/port/port.cpp
++++ b/port/port.cpp
+@@ -46,6 +46,7 @@ extern "C" { extern int gPortProfEnabled; extern uint64_t gPortProfStageNs[8]; e
+ #include "port_window_icon.h"
+ #endif
+ #ifdef __EMSCRIPTEN__
++extern "C" void port_netplay_init(void);
+ #include <emscripten.h>
+ #include <emscripten/heap.h>
+ 
+@@ -1389,6 +1390,7 @@ int main(int argc, char* argv[]) {
+ 
+ #ifdef __EMSCRIPTEN__
+ 	fprintf(stderr, "SSB64[wasm]: entering PortInit\n");
++	port_netplay_init();
+ #endif
+ 	if (PortInit(argc, argv) != 0) {
+ 		return 1;

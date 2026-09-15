@@ -1,0 +1,8 @@
+{
+  "name": "opensmash-netplay-browser-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {"test": "node browser-smoke.mjs"},
+  "devDependencies": {"playwright": "1.63.0"},
+  "engines": {"node": ">=22"}
+}

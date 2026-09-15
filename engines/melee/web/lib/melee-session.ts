@@ -74,6 +74,31 @@ export function claimMelee():Session{
  const session=standby;standby=undefined;return session;
 }
 
+/** Online simulation starts from a fresh save and frame zero, never a warm
+ * standby that has already consumed different wall-clock time and inputs. */
+export function claimOnlineMelee(seed:number,selection:unknown):Session{
+ suspendMelee();
+ if(!crossOriginIsolated||typeof SharedArrayBuffer==='undefined')throw Error('Multiplayer needs shared memory support.');
+ if(usesLocalDisc()&&!localDisc)throw Error('Choose your Melee disc first.');
+ const disc=localDisc,worker=new Worker(meleePath('/engine/engine-worker.js'));
+ const audio=new SharedArrayBuffer(16+8192*2*4);
+ let resolve!:()=>void,reject!:(error:Error)=>void;
+ const ready=new Promise<void>((ok,fail)=>{resolve=ok;reject=fail;});
+ void ready.catch(()=>{});
+ const session={worker,audio,ready,readyAt:0,cancel:()=>reject(Error('Game closed'))};
+ sessions.set(worker,session);
+ worker.addEventListener('message',({data})=>{
+  if(data.type==='netplay-ready'){session.readyAt=Date.now();resolve();}
+  if(data.type==='error')reject(Error(data.message));
+  if(data.type==='frame'&&!worker.onmessage)data.bitmap.close();
+ });
+ worker.addEventListener('error',e=>reject(Error(e.message||'The engine could not start.')));
+ worker.postMessage({type:'start',warm:true,character:'multiplayer',skin:'host',
+  localGame:!usesLocalDisc(),iso:disc,discVerified:!!disc&&verifiedDiscs.has(disc),
+  netplay:{seed},selection,audio});
+ return session;
+}
+
 export function releaseMelee(worker:Worker){
  sessions.get(worker)?.cancel();sessions.delete(worker);worker.terminate();
  if(!location.pathname?.startsWith('/melee'))warmMelee();

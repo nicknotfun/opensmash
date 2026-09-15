@@ -1,4 +1,6 @@
 import {loadSettings as loadMeleeSettings} from '../../engines/melee/web/lib/launch';
+import {createGame, gameLink, readJson} from '../shared/netplay-client.js';
+import {makeGameConfig, publicGameAction} from '../shared/netplay-launch.js';
 import {selectLocalDisc,subscribeLocalDisc} from '../../engines/melee/web/lib/melee-session';
 import {desktop as meleeDesktop} from '../../engines/melee/web/lib/desktop';
 import {pollService as pollMeleeService} from '../../engines/melee/web/lib/service-poll';
@@ -365,7 +367,31 @@ export default function App() {
     window.addEventListener('popstate', syncExperience);
     return () => window.removeEventListener('popstate', syncExperience);
   }, []);
-  function launchMelee(action){setEngine({experience:'melee',id:crypto.randomUUID(),action:{...action,selectionMode:advancedOptions.selectionMode,portPlan:controllerPlan(advancedOptions,gamepads)}});setPendingAction(null);}
+  const creatingGame = useRef(false);
+  async function launchOnline(action) {
+    if (creatingGame.current) return;
+    creatingGame.current = true;
+    setPageError('');
+    try {
+      if (window.openSmashDesktop) throw Error('Open the website in your browser to create an online game.');
+      if (typeof WebTransport !== 'function' || !window.isSecureContext) throw Error('Online games need HTTPS and a browser with WebTransport support.');
+      const experience = isMelee ? 'melee' : 'ssb64';
+      const options = {...launchOptionsFor(action), bootMode: 'free-for-all'};
+      const publicRoster = await readJson(await fetch('/api/characters', {credentials: 'omit', cache: 'no-store'}));
+      const meleeSettings = loadMeleeSettings();
+      const launchAction = publicGameAction(action, publicRoster.characters, isMelee ? meleeSettings : undefined);
+      const seed = crypto.getRandomValues(new Uint32Array(1))[0];
+      const config = makeGameConfig(experience, launchAction, options, meleeSettings, seed);
+      const access = await createGame(experience, config);
+      window.location.assign(gameLink(window.location.origin, experience, access.room.id));
+    } catch (error) { setPageError(error.message || 'Could not create your game.'); }
+    finally { creatingGame.current = false; }
+  }
+  function launchMelee(action){
+    if (meleeDesktop()) setEngine({experience:'melee',id:crypto.randomUUID(),action:{...action,selectionMode:advancedOptions.selectionMode,portPlan:controllerPlan(advancedOptions,gamepads)}});
+    else void launchOnline(action);
+    setPendingAction(null);
+  }
 
   useEffect(installPerformanceCapture, []);
   const isCreatePage = window.location.pathname.replace(/\/+$/, "") === "/create";
@@ -967,6 +993,7 @@ export default function App() {
   }
 
   function launch(action) {
+    if (!action.trailerIntro && !nativeSsb64 && !meleeDesktop()) { void launchOnline(action); return; }
     if(isMelee){launchMelee(action);return;}
     try {
       const launchOptions = launchOptionsFor(action);
@@ -1236,6 +1263,7 @@ export default function App() {
       return "about:blank";
     }
     try {
+      if (!action.trailerIntro && !nativeSsb64 && !meleeDesktop()) { void launchOnline(action); return 'about:blank'; }
       if(isMelee){launchMelee(action);return "about:blank";}
       const launchOptions = launchOptionsFor(action);
       const launchAction = prepareLaunchAction(action, launchOptions);

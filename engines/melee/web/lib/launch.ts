@@ -1,6 +1,7 @@
 import {preferences} from '@/lib/desktop';
 import schema from '../../runtime/launch-options.json';
 import {planLaunch} from '../../runtime/web/launch-options.mjs';
+import {seededRandom} from '../../runtime/web/netplay.mjs';
 import type {Fighter} from './fighter';
 export {schema};
 export type Settings=Omit<typeof schema.defaults,'ports'> & {ports:(typeof schema.defaults.ports[number] & {target?:string})[]};
@@ -16,4 +17,4 @@ export function loadSettings():Settings {try{
  }
  return {...defaults(),...saved};
 }catch{return defaults();}}
-export function plan(settings:Settings,selected:Fighter,roster:Fighter[]){return planLaunch(schema,settings,selected,roster);}
+export function plan(settings:Settings,selected:Fighter,roster:Fighter[],seed?:number){return planLaunch(schema,settings,selected,roster,seed===undefined?Math.random:seededRandom(seed));}

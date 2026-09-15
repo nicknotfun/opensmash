@@ -24,6 +24,7 @@ import {
 import { CREATION_DISABLED_MESSAGE, creationEnabled } from "./creation-switch.js";
 import { withInitialState } from "./html-state.js";
 import { withControllerRemap } from "./engine-html.js";
+import { netplayConfig } from "./netplay-config.js";
 import { resolveProjectPaths } from "./project-paths.js";
 import { assignRosterBases, bundleForBase, FIGHTERS, readOsb6Targets } from "./roster.js";
 import { characterAssetKind, engineBundleAssetKind, loadRemoteBakedRoster } from "./baked-remote.js";
@@ -33,6 +34,7 @@ import { ROMS_BY_SHA1, UNSUPPORTED_ROMS_BY_SHA1 } from "../shared/rom-catalog.js
 import { ACTIVE_JOB_STATUSES } from "./job-protocol.js";
 
 const handleMelee = createMeleeHandler();
+const publicNetplayConfig = netplayConfig();
 const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const {
   pipelineProjectRoot: PIPELINE_PROJECT_ROOT,
@@ -806,6 +808,11 @@ async function handleRequest(req, res, vite) {
   // images/audio may load without credentials; WASM retains SharedArrayBuffer.
   res.setHeader('Cross-Origin-Opener-Policy','same-origin');
   res.setHeader('Cross-Origin-Embedder-Policy','credentialless');
+
+  if (pathname === '/api/netplay/config' && req.method === 'GET') {
+    res.setHeader('Cache-Control', 'no-store');
+    return json(res, 200, publicNetplayConfig);
+  }
 
   // Firebase's hosted sign-in helper, served from our origin (see auth.js).
   // It carries no cookies either way and is never edge-cached.

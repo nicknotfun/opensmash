@@ -44,17 +44,20 @@ export default function MeleeExperience({action,onClose,soundOn=true}:{action:an
  const [ready,setReady]=useState(false),[status,setStatus]=useState('Choose your unmodified Melee USA 1.02 ISO or GCM.'),[error,setError]=useState('');
  const [setupError,setSetupError]=useState(''),[preparationStatus,setPreparationStatus]=useState('Preparing fighters…');
  const [resolved,setResolved]=useState<{action:any;roster:Fighter[]}|null>(null);
- const [settings,setSettings]=useState(()=>applyLauncherSelection(loadSettings(),action));
+ const [settings,setSettings]=useState(()=>applyLauncherSelection(action.netplaySettings||loadSettings(),action));
  const fighters=resolved?.roster||roster;
  const fighter=resolved?.action.character?fighters.find(f=>f.slug===resolved.action.character.slug):fighters[0];
  useEffect(()=>{
   if(!ready)return;
   const abort=new AbortController();
   setResolved(null);setError('');
-  const saved=loadSettings();
+  const saved=action.netplaySettings||loadSettings();
   resolveFighters(action,roster,abort.signal,setPreparationStatus).then(result=>{
-   if(!abort.signal.aborted){setSettings(applyLauncherSelection(saved,result.action));setResolved(result);}
-  }).catch(e=>{if(!abort.signal.aborted)setError(e.message);});
+   if(!abort.signal.aborted){
+    if(result.action.character&&!result.roster.some(f=>f.slug===result.action.character.slug))throw Error('The selected fighter could not be prepared.');
+    setSettings(applyLauncherSelection(saved,result.action));setResolved(result);
+   }
+  }).catch(e=>{if(!abort.signal.aborted){setError(e.message);(window as any).openSmashNetplay?.fail(e);}});
   return()=>abort.abort();
  },[ready,action]);
  useEffect(()=>{

@@ -98,7 +98,7 @@ static int intro_prepare(CPUState* s){
     intro_write(s,INTRO_VS_STATE+16,INTRO_DATA,4);intro_write(s,INTRO_VS_STATE+20,0,4);
     intro_active=1;intro_label=0;intro_elapsed=0;intro_retrace=~0u;intro_next_sound=20;intro_voice=0;intro_vs_spoken=0;intro_sample=0;intro_ready_logged=0;
 #ifdef __EMSCRIPTEN__
-    INTRO_SET_STATE(1);
+    INTRO_SET_STATE(opensmash_netplay_enabled()?2:1);
 #else
     INTRO_SET_STATE(2);
 #endif

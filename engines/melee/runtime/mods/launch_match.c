@@ -26,6 +26,7 @@ int opensmash_destination_ready(void) { return destination_ready || original_pac
 #include <stdatomic.h>
 #include <emscripten.h>
 #include <emscripten/threading.h>
+extern unsigned opensmash_netplay_enabled(void);
 static const char* costume_names[] = {"PlMrNr.dat", "PlMrYe.dat", "PlMrBk.dat", "PlMrBu.dat", "PlMrGr.dat", "PlFxNr.dat", "PlFxOr.dat", "PlFxLa.dat", "PlFxGr.dat", "PlCaNr.dat", "PlCaGy.dat", "PlCaRe.dat", "PlCaWh.dat", "PlCaGr.dat", "PlCaBu.dat", "PlDkNr.dat", "PlDkBk.dat", "PlDkRe.dat", "PlDkBu.dat", "PlDkGr.dat", "PlKbNr.dat", "PlKbYe.dat", "PlKbBu.dat", "PlKbRe.dat", "PlKbGr.dat", "PlKbWh.dat", "PlKpNr.dat", "PlKpRe.dat", "PlKpBu.dat", "PlKpBk.dat", "PlLkNr.dat", "PlLkRe.dat", "PlLkBu.dat", "PlLkBk.dat", "PlLkWh.dat", "PlSkNr.dat", "PlSkRe.dat", "PlSkBu.dat", "PlSkGr.dat", "PlSkWh.dat", "PlNsNr.dat", "PlNsYe.dat", "PlNsBu.dat", "PlNsGr.dat", "PlPeNr.dat", "PlPeYe.dat", "PlPeWh.dat", "PlPeBu.dat", "PlPeGr.dat", "PlPpNr.dat", "PlPpGr.dat", "PlPpOr.dat", "PlPpRe.dat", "PlNnNr.dat", "PlNnYe.dat", "PlNnAq.dat", "PlNnWh.dat", "PlPkNr.dat", "PlPkRe.dat", "PlPkBu.dat", "PlPkGr.dat", "PlSsNr.dat", "PlSsPi.dat", "PlSsBk.dat", "PlSsGr.dat", "PlSsLa.dat", "PlYsNr.dat", "PlYsRe.dat", "PlYsBu.dat", "PlYsYe.dat", "PlYsPi.dat", "PlYsAq.dat", "PlPrNr.dat", "PlPrRe.dat", "PlPrBu.dat", "PlPrGr.dat", "PlPrYe.dat", "PlMtNr.dat", "PlMtRe.dat", "PlMtBu.dat", "PlMtGr.dat", "PlLgNr.dat", "PlLgWh.dat", "PlLgAq.dat", "PlLgPi.dat", "PlMsNr.dat", "PlMsRe.dat", "PlMsGr.dat", "PlMsBk.dat", "PlMsWh.dat", "PlZdNr.dat", "PlZdRe.dat", "PlZdBu.dat", "PlZdGr.dat", "PlZdWh.dat", "PlClNr.dat", "PlClRe.dat", "PlClBu.dat", "PlClWh.dat", "PlClBk.dat", "PlDrNr.dat", "PlDrRe.dat", "PlDrBu.dat", "PlDrGr.dat", "PlDrBk.dat", "PlFcNr.dat", "PlFcRe.dat", "PlFcBu.dat", "PlFcGr.dat", "PlPcNr.dat", "PlPcRe.dat", "PlPcBu.dat", "PlPcGr.dat", "PlGwNr.dat", "PlGnNr.dat", "PlGnRe.dat", "PlGnBu.dat", "PlGnGr.dat", "PlGnLa.dat", "PlFeNr.dat", "PlFeRe.dat", "PlFeBu.dat", "PlFeGr.dat", "PlFeYe.dat"};
 static unsigned costume_sizes[sizeof(costume_names)/sizeof(costume_names[0])], css_sizes[4];
 static const char* css_names[]={"MnSlChr.dat","MnSlChr.usd","nr_select.ssm","nr_select.ssm"};
@@ -53,7 +54,7 @@ EMSCRIPTEN_KEEPALIVE void opensmash_configure_launch(int mode,int stage,int leve
                                                    unsigned p0,unsigned p1,unsigned p2,unsigned p3) {
     launch_mode=mode;arena=stage;cpu_level=level;stocks=stock;minutes=mins;
     port_config[0]=p0;port_config[1]=p1;port_config[2]=p2;port_config[3]=p3;
-    validate_config();atomic_store(&preparation,mode==0?1:4);opensmash_choose_fighter(p0&255);
+    validate_config();atomic_store(&preparation,mode==0&&!opensmash_netplay_enabled()?1:4);opensmash_choose_fighter(p0&255);
 }
 #endif
 
@@ -101,6 +102,11 @@ static int setting(const char* name, int fallback, int minimum, int maximum) {
 static void on_load(const ModernGekkoModHostApi* api) {
     (void)api;
     requested = getenv("OPENSMASH_MATCH") != NULL;
+#ifdef __EMSCRIPTEN__
+    /* Online sessions select before boot so every peer has the same launch
+     * configuration at its first emulated frame. */
+    if(opensmash_netplay_enabled() && atomic_load(&selected_fighter)>=0){validate_config();return;}
+#endif
     fighter = setting("OPENSMASH_FIGHTER", 8, 0, 25);
     opponent = setting("OPENSMASH_OPPONENT", 12, 0, 25);
     arena = setting("OPENSMASH_STAGE", 31, 2, 32);

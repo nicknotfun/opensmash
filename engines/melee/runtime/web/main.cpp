@@ -18,6 +18,7 @@ static BrowserHookIndex hook_index;
 static std::atomic<unsigned> frame_count{0};
 static std::atomic<unsigned> intervals[4096]{};
 extern "C" int opensmash_destination_ready();
+extern "C" unsigned opensmash_netplay_enabled();
 static bool combat_pacing_restored = false;
 extern "C" EMSCRIPTEN_KEEPALIVE unsigned opensmash_frame_count() { return frame_count.load(); }
 extern "C" EMSCRIPTEN_KEEPALIVE unsigned opensmash_frame_interval(unsigned n) { return intervals[n % 4096].load(); }
@@ -104,8 +105,10 @@ int main(int argc, char** argv)
   const auto settings = config.user_directory / "Config/Dolphin.ini";
   if (!std::filesystem::exists(settings)) {
     std::ofstream file(settings);
-    file << "[Core]\nCPUThread = True\nEnableCheats = False\n"
-            "[DSP]\nBackend = Browser\n"
+    file << "[Core]\nCPUThread = True\nEnableCheats = False\n";
+    if (opensmash_netplay_enabled())
+      file << "SIDevice0 = 6\nSIDevice1 = 6\nSIDevice2 = 6\nSIDevice3 = 6\n";
+    file << "[DSP]\nBackend = Browser\n"
             "[Interface]\nConfirmStop = False\nOnScreenDisplayMessages = False\n";
   }
   {
@@ -114,6 +117,9 @@ int main(int argc, char** argv)
   }
   auto created = moderngekko::Runtime::Create(std::move(config));
   if (!created) { std::fprintf(stderr, "%s\n", created.error->message.c_str()); return 1; }
+  // Online peers use one ordered CPU/GPU execution stream. Independent GPU
+  // thread scheduling must not change emulated hardware completion timing.
+  if (opensmash_netplay_enabled()) Config::SetBase(Config::MAIN_CPU_THREAD, false);
   // Local files do not need simulated optical-drive seek/transfer delays.
   Config::SetBase(Config::MAIN_FAST_DISC_SPEED, true);
   Core::SetIsThrottlerTempDisabled(true);

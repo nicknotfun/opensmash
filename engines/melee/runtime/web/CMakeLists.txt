@@ -82,7 +82,7 @@ add_library(opensmash-game-reference STATIC EXCLUDE_FROM_ALL ${OPENSMASH_REFEREN
 target_include_directories(opensmash-game-reference PRIVATE
   "${OPENSMASH_RECOMPILED_GAME}" "${OPENSMASH_DOLPHIN}/GXRuntime/include")
 target_compile_options(opensmash-game-reference PRIVATE -O2 -ffp-contract=off -fno-fast-math)
-add_executable(opensmash-web "${OPENSMASH_WEB_SOURCE}/main.cpp" "${OPENSMASH_WEB_SOURCE}/skin_runtime.cpp" "${OPENSMASH_WEB_SOURCE}/verify_image.cpp"
+add_executable(opensmash-web "${OPENSMASH_WEB_SOURCE}/main.cpp" "${OPENSMASH_WEB_SOURCE}/netplay.cpp" "${OPENSMASH_WEB_SOURCE}/skin_runtime.cpp" "${OPENSMASH_WEB_SOURCE}/verify_image.cpp"
   "${OPENSMASH_WEB_SOURCE}/../mods/launch_match.c")
 target_link_libraries(opensmash-web PRIVATE moderngekko opensmash-game mbedcrypto fmt::fmt)
 target_include_directories(opensmash-web PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include" "${OPENSMASH_DOLPHIN}/Source/Core")

@@ -1,0 +1,36 @@
+diff --git a/src/sys/utils.c b/src/sys/utils.c
+index 7061bee..2982f39 100644
+--- a/src/sys/utils.c
++++ b/src/sys/utils.c
+@@ -222,18 +222,31 @@ s32 syUtilsRandIntRange(s32 range)
+ #endif
+ }
+ 
++#if defined(PORT) && defined(__EMSCRIPTEN__)
++extern int port_netplay_enabled(void);
++#endif
++
+ u8 syUtilsRandTimeUChar(void)
+ {
++#if defined(PORT) && defined(__EMSCRIPTEN__)
++    if (port_netplay_enabled()) return (u8)syUtilsRandUShort();
++#endif
+     return osGetTime();
+ }
+ 
+ f32 syUtilsRandTimeFloat(void)
+ {
++#if defined(PORT) && defined(__EMSCRIPTEN__)
++    if (port_netplay_enabled()) return ((u8)syUtilsRandUShort()) / 256.0F;
++#endif
+     return (osGetTime() & 0xFF) / 256.0F;
+ }
+ 
+ s32 syUtilsRandTimeUCharRange(s32 range)
+ {
++#if defined(PORT) && defined(__EMSCRIPTEN__)
++    if (port_netplay_enabled()) return ((s32)(u8)syUtilsRandUShort() * range) / 256.0F;
++#endif
+     return ((s32)(osGetTime() & 0xFF) * range) / 256.0F;
+ }
+ 

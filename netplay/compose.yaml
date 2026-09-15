@@ -1,0 +1,18 @@
+services:
+  relay:
+    build: ./relay
+    restart: unless-stopped
+    ports:
+      - "443:8443/tcp"
+      - "443:8443/udp"
+    environment:
+      RELAY_ADDR: :8443
+      RELAY_ALLOWED_ORIGINS: ${RELAY_ALLOWED_ORIGINS:?Set the exact HTTPS site origin}
+      RELAY_TLS_CERT: /tls/fullchain.pem
+      RELAY_TLS_KEY: /tls/privkey.pem
+    volumes:
+      - ${RELAY_TLS_DIRECTORY:?Set the certificate directory}:/tls:ro
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    stop_grace_period: 10s

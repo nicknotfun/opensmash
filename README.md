@@ -1,5 +1,13 @@
 # OpenSmash
 
+## WebTransport multiplayer fork
+
+Browser games on this branch create unique invitation links for up to four
+players. A Go WebTransport relay distributes confirmed inputs, and both browser
+engines include frame synchronization gates. Rebuilt engines and real gameplay
+validation are required before deployment. See [setup, architecture, tests and
+deployment requirements](docs/webtransport-multiplayer.md).
+
 Super Smash Bros. 64 in the browser, with new fighters from image uploads. Give it a
 name and (optionally) a photo, and the pipeline produces a low-poly rigged
 mesh, a character-select portrait, a stock icon, a series emblem, and an
