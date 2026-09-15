@@ -1,3 +1,17 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -932,7 +932,9 @@ elseif (EMSCRIPTEN)
+         -sINITIAL_MEMORY=256MB
+         -sSTACK_SIZE=8388608
+         -sFORCE_FILESYSTEM=1
+-        -sEXPORTED_RUNTIME_METHODS=FS,callMain
++        # Emscripten 6 requires explicit Module heap exports. The browser shell
++        # and netplay controller bridge read these views, including after growth.
++        -sEXPORTED_RUNTIME_METHODS=FS,callMain,HEAPU8,HEAP32
+         -sINVOKE_RUN=0
+         -sEXIT_RUNTIME=0
+         # ASSERTIONS=0 + -g1 for demo/production wasm: ASSERTIONS wraps the
 diff --git a/port/gameloop.cpp b/port/gameloop.cpp
 index 9b0e715..4b5e2ed 100644
 --- a/port/gameloop.cpp

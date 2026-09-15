@@ -1,7 +1,9 @@
 """Stage pinned BattleShip sources with the browser simulation gate, then build.
 
-Requires an initialized BattleShip checkout, emsdk, native Torch prerequisites,
-and the user's ROM. The source checkout is never edited.
+Requires an initialized BattleShip checkout, emsdk, and native Torch prerequisites.
+No ROM is needed to build the browser runtime: players extract their own assets
+in the browser. --rom optionally enables local build-time asset extraction.
+The source checkout is never edited.
 """
 import argparse
 import json
@@ -66,25 +68,32 @@ def stage(engine, source):
     apply_patches(source)
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--engine", type=Path, required=True)
     parser.add_argument("--source", type=Path, default=ROOT / "build/ssb64-netplay-source")
-    parser.add_argument("--rom", type=Path)
+    parser.add_argument("--rom", type=Path, help="Optional user-owned US v1.0 ROM for local asset extraction; omitted for public browser builds")
     parser.add_argument("--prepare-only", action="store_true")
     parser.add_argument("--jobs", type=int, default=8)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    if args.jobs < 1:
+        raise ValueError("--jobs must be positive.")
+    rom = args.rom.resolve() if args.rom else None
+    if rom is not None and not rom.is_file():
+        raise ValueError("The optional --rom must point to your Smash 64 US v1.0 ROM.")
     source = args.source.resolve()
     stage(args.engine.resolve(), source)
     if args.prepare_only:
         print(f"Patched source ready at {source}")
         return
-    rom = (args.rom or args.engine / "baserom.us.z64").resolve()
-    if not rom.is_file():
-        raise ValueError("Supply your Smash 64 US v1.0 ROM with --rom.")
-    # The private source output is ignored; game data never enters a release.
-    (source / "baserom.us.z64").symlink_to(rom)
-    run(["emcmake", "cmake", "-B", "build-wasm", "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release", "-DSSB64_VERSION=us"], source)
+    # Do not discover or copy a ROM from the input checkout automatically.
+    # Upstream leaves extraction targets out of the normal build when absent.
+    if rom is not None:
+        (source / "baserom.us.z64").symlink_to(rom)
+    # Emscripten's named-export library preserves Wasm export names even at
+    # -O3, allowing deployment to inspect the compiled netplay capability.
+    # Keep the ordinary Module exports and optimized simulation unchanged.
+    run(["emcmake", "cmake", "-B", "build-wasm", "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release", "-DSSB64_VERSION=us", "-DCMAKE_EXE_LINKER_FLAGS=-lexports.js"], source)
     run(["cmake", "--build", "build-wasm", "--target", "BattleShip.js", "-j", str(args.jobs)], source)
     run(["bash", "scripts/build_torch_wasm.sh"], source)
     run(["bash", "scripts/package_web.sh", "build-wasm", "web-dist"], source)

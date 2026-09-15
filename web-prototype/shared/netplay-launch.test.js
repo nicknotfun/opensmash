@@ -54,3 +54,43 @@ test('crafted invitations cannot schedule conversions for more than four fighter
   room.config.action.picks = [{slug: '../../private'}];
   assert.throws(() => meleeRoomAction(room), /Invalid fighter/);
 });
+
+
+test('original Melee settings survive public room creation, frozen seats and launch translation', async () => {
+ const {applyLauncherSelection,launchFighter,withOriginalFighters}=await import('../../engines/melee/launcher/launch-plan.mjs');
+ const {planLaunch}=await import('../../engines/melee/runtime/web/launch-options.mjs');
+ const {default:schema}=await import('../../engines/melee/runtime/launch-options.json',{with:{type:'json'}});
+ const settings=withOriginalFighters(structuredClone(schema.defaults));
+ settings.ports[0].originalCharacter='vanilla:2';
+ settings.ports[1].originalCharacter='vanilla:12';
+ const action=publicGameAction({type:'character'},[],settings);
+ const config=makeGameConfig('melee',action,{},settings,123);
+ const roomAction=meleeRoomAction({config:structuredClone(config),players:[{seat:0},{seat:1}]});
+ const launchSettings=applyLauncherSelection(roomAction.netplaySettings,roomAction);
+ const selected=launchFighter(schema,launchSettings,roomAction,[]);
+ const plan=planLaunch(schema,launchSettings,selected,[],()=>0);
+ assert.deepEqual(plan.ports.map(port=>port.fighter),[2,12,0,0]);
+ assert.deepEqual(plan.ports.map(port=>port.device),['keyboard','gamepad0','cpu','cpu']);
+ assert.deepEqual(plan.costumes,[]);
+ assert.equal(config.seed,123);
+});
+
+test('the default random original Melee opponent is accepted in public games', () => {
+ const action=publicGameAction({},[],{ports:[{character:'selected'},{character:'random:vanilla'},{character:'random'},{character:'random'}]});
+ assert.equal(action.type,'character');
+ assert.throws(()=>publicGameAction({},[],{ports:[{character:'selected',originalCharacter:'vanilla:26'}]}),/valid original Melee/);
+});
+
+
+test('all-original Melee rooms discard unused private picks; mixed lineups still require public assets', () => {
+ const settings={ports:Array.from({length:4},()=>({character:'selected',originalCharacter:'random:vanilla'}))};
+ const original={type:'character',character:{slug:'private-one',bundleUrl:'/private/token'},picks:[{slug:'private-two'}]};
+ const action=publicGameAction(original,[],settings);
+ assert.deepEqual(action,{type:'character',character:undefined,picks:[],opponents:[]});
+ assert.equal(original.character.slug,'private-one');
+ assert.equal(JSON.stringify(makeGameConfig('melee',action,{},settings,42)).includes('/private/token'),false);
+ const mixed=structuredClone(settings);
+ delete mixed.ports[1].originalCharacter;
+ assert.throws(()=>publicGameAction(original,[],mixed),/public fighters/);
+ assert.throws(()=>publicGameAction(original,[]),/public fighters/);
+});

@@ -4,7 +4,7 @@ import {planLaunch} from '../../runtime/web/launch-options.mjs';
 import {seededRandom} from '../../runtime/web/netplay.mjs';
 import type {Fighter} from './fighter';
 export {schema};
-export type Settings=Omit<typeof schema.defaults,'ports'> & {ports:(typeof schema.defaults.ports[number] & {target?:string})[]};
+export type Settings=Omit<typeof schema.defaults,'ports'> & {ports:(typeof schema.defaults.ports[number] & {target?:string;originalCharacter?:string})[]};
 export const defaults=()=>structuredClone(schema.defaults);
 // The alpha shipped with a single Peach CPU on Battlefield as the default; saved copies of
 // those opponents follow the new random lineup while keeping player 1's own controller.

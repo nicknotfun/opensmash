@@ -1,4 +1,5 @@
 import {lstat, readFile, readdir} from "node:fs/promises";
+import {createHash} from "node:crypto";
 import path from "node:path";
 import {pathToFileURL} from "node:url";
 
@@ -75,6 +76,90 @@ export function siteConfiguration(config) {
 export const runtimeFiles = Object.freeze([
   "index.html", "BattleShip.js", "BattleShip.wasm", "manifest.json", "rom-extract.js", "torch-worker.js",
 ]);
+// CMake/libarchive adds Unix IDs and timestamps, whose values vary by build.
+// Admit only their bounded formats, in both central and local headers. zip.js
+// exposes parsed fields and raw length, so no separate ZIP parser is needed.
+function checkShaderExtraFields(metadata, name, local = false) {
+  let encodedSize = 0;
+  for (const [type, {data}] of metadata.extraField || []) {
+    const timestamps = type === 0x5455 && data[0] > 0 && data[0] <= 7 &&
+      data.length === (local ? 1 + 4 * ((data[0] & 1) + ((data[0] >> 1) & 1) + ((data[0] >> 2) & 1)) : 5);
+    const unixIds = type === 0x7875 && data.length === 11 && data[0] === 1 && data[1] === 4 && data[6] === 4;
+    if (!timestamps && !unixIds) throw Error(`Unexpected shader ZIP extra field: ${name}`);
+    encodedSize += 4 + data.length;
+  }
+  if (encodedSize !== metadata.extraFieldLength || encodedSize !== metadata.rawExtraField.length) {
+    throw Error(`Malformed or duplicate shader ZIP extra field: ${name}`);
+  }
+}
+
+// f3d.o2r is an archive of open-source renderer shaders. Game archives use
+// the same extension, so allow only the exact files/bytes from the pinned source.
+export async function checkShaderArchive(data, expectedFiles) {
+  if (data.length > 4 * 1024 * 1024) throw Error("Shader archive exceeds its size limit.");
+  const {ZipReader, Uint8ArrayReader} = await import("@zip.js/zip.js");
+  const directories = new Set();
+  for (const name of Object.keys(expectedFiles)) {
+    for (let parent = path.posix.dirname(name); parent !== "."; parent = path.posix.dirname(parent)) directories.add(parent + "/");
+  }
+  const reader = new ZipReader(new Uint8ArrayReader(data), {
+    useWebWorkers: false, strictness: "strict", maxAppendedDataSize: 0, checkOverlappingEntry: true,
+  });
+  const seen = new Set(), files = new Set();
+  try {
+    const entries = await reader.getEntries();
+    // This small, unsigned archive needs neither ZIP64 nor any comment/signature
+    // payload. An ordinary end-of-central-directory record occupies 22 bytes.
+    if (reader.comment.length || reader.digitalSignature !== undefined ||
+        reader.directoryOffset + reader.directoryLength + 22 !== data.length) {
+      throw Error("Unexpected shader ZIP comment, signature or trailing records.");
+    }
+    if (entries.length > Object.keys(expectedFiles).length + directories.size) throw Error("Unexpected entries in shader archive.");
+    let nextOffset = 0;
+    for (const entry of entries.sort((a, b) => a.offset - b.offset)) {
+      const name = entry.filename;
+      const kind = (entry.externalFileAttributes >>> 16) & 0o170000;
+      if (seen.has(name) || entry.encrypted || entry.symlink || entry.zip64 || entry.diskNumberStart !== 0 ||
+          entry.rawComment.length || ![0, 8].includes(entry.compressionMethod) ||
+          !Buffer.from(entry.rawFilename).equals(Buffer.from(name)) ||
+          (kind && kind !== (entry.directory ? 0o040000 : 0o100000))) {
+        throw Error(`Invalid shader archive entry: ${name}`);
+      }
+      if (entry.offset !== nextOffset) throw Error(`Unclaimed data between shader ZIP entries: ${name}`);
+      checkShaderExtraFields(entry, name);
+      seen.add(name);
+      let expected;
+      if (entry.directory) {
+        if (!directories.has(name) || entry.uncompressedSize !== 0 || entry.compressedSize !== 0 || entry.compressionMethod !== 0) {
+          throw Error(`Unexpected shader directory: ${name}`);
+        }
+        expected = {size: 0};
+      } else {
+        expected = Object.hasOwn(expectedFiles, name) && expectedFiles[name];
+        if (!expected || entry.uncompressedSize !== expected.size) throw Error(`Unexpected shader file or size: ${name}`);
+      }
+      const hash = createHash("sha256");
+      let size = 0;
+      // Read directories too: their local headers can otherwise hide extra data.
+      await entry.getData(new WritableStream({write(chunk) {
+        size += chunk.length;
+        if (size > expected.size) throw Error(`Shader data exceeds expected size: ${name}`);
+        hash.update(chunk);
+      }}), {checkCrc32: true});
+      checkShaderExtraFields(entry.localDirectory, name, true);
+      const descriptor = entry.localDirectory.dataDescriptor;
+      if (descriptor && (descriptor.crc32 !== entry.crc32 || descriptor.compressedSize !== entry.compressedSize ||
+          descriptor.uncompressedSize !== entry.uncompressedSize)) throw Error(`Invalid shader ZIP data descriptor: ${name}`);
+      nextOffset = entry.localDirectory.dataOffset + entry.compressedSize + (descriptor ? 12 + (descriptor.signature ? 4 : 0) : 0);
+      if (size !== expected.size || (!entry.directory && hash.digest("hex") !== expected.sha256)) throw Error(`Shader checksum mismatch: ${name}`);
+      if (!entry.directory) files.add(name);
+    }
+    if (nextOffset !== reader.directoryOffset) throw Error("Unclaimed data before the shader ZIP directory.");
+    if (files.size !== Object.keys(expectedFiles).length) throw Error("Shader archive is missing pinned source files.");
+  } finally { await reader.close(); }
+  return {files: files.size};
+}
+
 export async function checkRuntime(root) {
   const seen = new Set();
   async function walk(directory) {
@@ -85,8 +170,14 @@ export async function checkRuntime(root) {
       if (entry.isDirectory()) await walk(filename);
       else {
         if (!entry.isFile()) throw Error(`Runtime context contains a non-regular file: ${relative}`);
-        if (/\.(z64|n64|v64|iso|gcm|o2r)$/i.test(entry.name)) throw Error(`Remove ROM/disc or extracted game archive from runtime context: ${relative}`);
-        seen.add(relative.split(path.sep).join("/"));
+        const name = relative.split(path.sep).join("/");
+        if (name === "files/f3d.o2r") {
+          const manifest = JSON.parse(await readFile(new URL("../config/ssb64-f3d-shaders.json", import.meta.url), "utf8"));
+          await checkShaderArchive(await readFile(filename), manifest.files);
+        } else if (/\.(z64|n64|v64|iso|gcm|o2r)$/i.test(entry.name)) {
+          throw Error(`Remove ROM/disc or extracted game archive from runtime context: ${relative}`);
+        }
+        seen.add(name);
       }
     }
   }

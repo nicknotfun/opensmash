@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "repository": "https://github.com/turtlesoupy/libultraship",
+    "revision": "eb96ccd1059ce6a905b16e1f9884c51b22e85f35",
+    "directory": "src/fast/shaders"
+  },
+  "files": {
+    "shaders/directx/default.shader.hlsl": {
+      "size": 11000,
+      "sha256": "e7fd38f61ffb95a207042b2fac4e27c0c3e781a0e21c6d7dc1d071d90dc6dd01"
+    },
+    "shaders/metal/default.shader.metal": {
+      "size": 9449,
+      "sha256": "b82877b2a8bc7b2e0a344810b3afd08751a6b092200cf77df206cf15d7facd7d"
+    },
+    "shaders/opengl/default.shader.glsl": {
+      "size": 9498,
+      "sha256": "e333dda2a4c03f8a0cee69f3b01c494a4380128851e822842fdb57862f84cf49"
+    },
+    "shaders/postprocess/crt-lottes.glsl": {
+      "size": 4549,
+      "sha256": "be56e09c7c5aa6cc25a6eb98de8662e7fbd7b6d59cd306920e68e2316e354fef"
+    },
+    "shaders/postprocess/crt-lottes.hlsl": {
+      "size": 3534,
+      "sha256": "e7ec48f1448ec14af707cf2ab7d89ee25fbcca551a96e6589247467cc19a56c7"
+    },
+    "shaders/postprocess/crt-lottes.msl": {
+      "size": 3700,
+      "sha256": "5d80231db5bc6b03aee97634d760625b69a7e305fea8b5109064605af55f013c"
+    },
+    "shaders/postprocess/scanlines.glsl": {
+      "size": 2339,
+      "sha256": "478d3d3b8b99c27ca59d7999d395e12e2c979120921e70fbf8fbc0e97fcef197"
+    },
+    "shaders/postprocess/scanlines.hlsl": {
+      "size": 2864,
+      "sha256": "4b092542e020d5fbb75043f51b5ffd6a566fb02cebf439d43a4d2f6cf8d9de36"
+    },
+    "shaders/postprocess/scanlines.msl": {
+      "size": 3225,
+      "sha256": "519218de5a47c0bd47f48152419fe9bec374853109a490c3622f5c49316d8f0d"
+    },
+    "shaders/postprocess/slang-persistence.slang": {
+      "size": 1962,
+      "sha256": "b116101374cabb27905dce28ff7967de89bbd3cf1e237888352f94c7866b69d1"
+    },
+    "shaders/postprocess/slang-scanlines.slang": {
+      "size": 1784,
+      "sha256": "97420cba130d7fd8e719d5d689c52bfd6178582da2697b85d138700c299b9fdc"
+    }
+  }
+}

@@ -170,8 +170,11 @@ belongs in that public asset store.
 
 ## Add a patched Smash 64 runtime later
 
-Build according to `engines/ssb64/netplay/README.md`, then provide only its
-packaged `web-dist` directory as a named BuildKit context:
+The deployment operator builds and hosts this runtime from the pinned open-source
+code; no ROM is needed for that build. Players provide their own Smash 64 US v1.0
+ROM in the browser, where Torch extracts the game assets locally. Build according
+to `engines/ssb64/netplay/README.md`, then provide only its packaged `web-dist`
+directory as a named BuildKit context:
 
 ```sh
 node web-prototype/infra/pilot-site.mjs check-runtime /path/to/web-dist
@@ -181,7 +184,10 @@ docker build -f web-prototype/docker/pilot-api.Dockerfile --target with-ssb64 \
 
 Preflight requires the engine, extraction tools, supporting files, and a real
 compiled netplay capability export. It rejects symlinks and known ROM/disc/archive
-extensions. This is a packaging check; the browser still verifies the capability
+extensions, with one exact exception: `files/f3d.o2r` must contain only the eleven
+open-source shaders pinned by `config/ssb64-f3d-shaders.json`, with every file size
+and checksum matching. Renaming a game archive does not pass that check.
+This is a packaging check; the browser still verifies the capability
 version and actual two-browser gameplay must pass before enabling gameplay.
 The cloud rollout accepts the same optional runtime directory:
 

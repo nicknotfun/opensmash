@@ -49,15 +49,35 @@ Use the BattleShip and decomp revisions in `upstream.json`, initialize all its
 submodules, install its documented prerequisites, and activate emsdk. Then:
 
 ```sh
-python3 engines/ssb64/netplay/build.py --engine /path/to/BattleShip --rom /path/to/baserom.us.z64
+python3 engines/ssb64/netplay/build.py --engine /path/to/BattleShip
 ```
 
-The command archives committed source into the repository's ignored `build`
-directory, applies the patches, builds WASM and Torch, and packages `web-dist`.
-It never edits the input checkout. `--prepare-only` stops after staging source.
+No developer ROM is required. The command archives committed source into the
+repository's ignored `build` directory, applies the patches, builds the game
+WASM and native/browser Torch tools, and packages `web-dist`. Players provide
+their own ROM in the browser; browser Torch extracts and caches their game
+assets locally. The public package excludes `BattleShip.o2r`. Its separate
+`files/f3d.o2r` contains the open-source Fast3D shaders required by the renderer.
+The game links Emscripten's `exports.js` library to preserve the compiled Wasm
+export names, so deployment can verify the netplay capability in optimized builds.
+It also explicitly exports `Module.HEAPU8` and `Module.HEAP32`, which the browser
+shell and controller bridge use; Emscripten refreshes these views after memory grows.
+
+For local asset extraction during a build, explicitly add
+`--rom /path/to/baserom.us.z64`. A ROM in the input checkout is never picked up
+automatically. The command never edits that checkout. `--prepare-only` stops
+after staging source.
 `--source` chooses a new empty output directory. Serve the resulting `web-dist`
 with `OPENSMASH_ENGINE_ROOT=/absolute/path/to/web-dist` when starting the
 website; the website provides the bridge script.
+
+After building, exercise the actual compiled capability, controller memory views,
+and memory-growth updates without a ROM:
+
+```sh
+OPENSMASH_TEST_ENGINE_ROOT=/absolute/path/to/web-dist \
+  node --test engines/ssb64/netplay/test_runtime.mjs
+```
 
 ## Validation boundary
 

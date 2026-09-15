@@ -36,13 +36,14 @@ us-central1-docker.pkg.dev/nicknotfun-opensmash/opensmash/relay@sha256:cc8df4cfe
 us-central1-docker.pkg.dev/nicknotfun-opensmash/opensmash/melee@sha256:f6bd2a95d27e0f4cd3b72a7c7d11c2d8d69742635ded03f463a5a7fbbaa3feae
 ```
 
-The website image built successfully in Cloud Build
-`81cdc724-b4c6-4733-9fc4-9249f1b02b3e` and is running as Cloud Run revision
-`opensmash-site-00001-nq2`. Its origin is
+The website image includes the ROM-free Smash 64 runtime and original-Melee
+launcher. It built successfully in Cloud Build
+`2d34b05f-9dea-401e-9574-4d7dd21d2dae` and is running as Cloud Run revision
+`opensmash-site-00004-8n7`. Its origin is
 `https://opensmash-site-oxrdjed7ra-uc.a.run.app`.
 
 ```text
-us-central1-docker.pkg.dev/nicknotfun-opensmash/opensmash-site/website@sha256:72182744ac0f9cbd4fe872397c66bc28655769a12b5be3d6a8a6910298130cff
+us-central1-docker.pkg.dev/nicknotfun-opensmash/opensmash-site/website@sha256:6d4804e37283e8cff113e3b2093a40ecefd55fcce8b26b527bb8406a83d7232c
 ```
 
 ## Live verification
@@ -50,7 +51,10 @@ us-central1-docker.pkg.dev/nicknotfun-opensmash/opensmash-site/website@sha256:72
 Verified through `https://smash.not.fun` on 2026-09-15:
 
 - Homepage, `/livez`, netplay config, auth config, session and character APIs: HTTP 200.
-- 1,046 roster entries; the sample portrait returns 404 while asset publication is pending.
+- All 7,322 approved roster objects are published: 2,937,695,460 bytes, with GCS checksums and sizes matching the pinned local manifest.
+- Chrome fetched, checksum-verified and decoded all 1,046 tile portraits; 35 representative full/medium images, game bundles, UI bundles and audio clips also passed.
+- Original Melee UI: selected Fox and Peach, created a unique game link, joined over WebTransport, and reached the ISO picker with both choices preserved. No source-import or conversion requests occurred; the temporary room was then closed.
+- Chrome verified all 32 hosted engine resources against the packaged bytes and initialized the actual Smash 64 and Torch modules without a ROM. Both controller heap views passed write/read checks; no browser errors occurred.
 - Public TLS validation succeeds; HTTP redirects to HTTPS.
 - COOP `same-origin`, COEP `credentialless`, and private/no-store API responses survive the Worker proxy.
 - Firebase advertises email sign-in only; an actual email-link sign-in has not been tested.
@@ -73,28 +77,61 @@ The local result is saved in
 
 ## Gameplay prerequisites
 
-The infrastructure does not contain game ROMs or a verified Melee workspace.
-The Melee endpoint intentionally returns HTTP 503 with
-`Melee game assets are not provisioned` until the private workspace is installed.
-Smash 64 needs the patched browser runtime built according to
-[its build instructions](../engines/ssb64/netplay/README.md), then deployed with
-`deploy/gcp/site.py --ssb64-runtime /path/to/web-dist`.
-Melee needs the [verified workspace and matching browser inputs](../engines/melee/server/README.md)
-on its persistent volume. These inputs must stay outside source control.
+An **engine build** is the compiled browser application (`.wasm` plus JavaScript
+and support files). The deployment operator builds and hosts it. Players do not
+supply an engine build.
+
+**Smash 64:** the patched engine and browser Torch extractor were built from
+pinned source without a ROM, using Emscripten 6.0.2. Both modules initialize, and
+the compiled multiplayer capability returns version 2. Controller memory writes and
+heap-view refresh after memory growth pass against the actual compiled module.
+These files are now hosted
+at `/engine/` on the public site. The local runtime package is
+`/home/nick/.cache/opensmash-deploy/ssb64-build/source/web-dist`; its build record
+is `/home/nick/.cache/opensmash-deploy/ssb64-build/runtime-build-records.json`. Each player supplies a Smash 64 US v1.0 ROM
+in the browser. Game data is extracted locally. Real gameplay validation still
+requires that ROM. See [build instructions](../engines/ssb64/netplay/README.md).
+
+**Melee:** the current runtime compiles the game's executable (`main.dol`) from
+an unmodified USA 1.02 ISO/GCM during its one-time build. A *verified workspace*
+means the extracted disc files in `assets/game` plus their checked hash receipt
+at `build/web-game/verified.json`. The operator generates these from the ISO;
+players do not assemble those directories. Selecting a disc on the website keeps
+it in the browser and does not provision the server. No ISO has been supplied
+for this deployment, so the Melee runtime/workspace remain unbuilt and its
+service intentionally returns HTTP 503.
+
+The shared launcher now supports [original Melee fighters](../engines/melee/docs/ORIGINAL_FIGHTERS.md)
+under **Settings → Gameplay Options**. An all-original lineup skips custom source
+imports and costume conversion. Custom Melee fighters additionally require their
+original rigged source models; these cannot be recovered from the published
+Smash 64 bundles. Providing the ISO lets the operator handle Melee's remaining
+build/provisioning work for the original roster.
 
 Fighter creation is disabled. The existing creation pipeline also needs its
 worker, conversion inputs and Tripo/fal configuration; an OpenAI key alone does
 not complete that service.
 
-The pinned public roster has been downloaded and checksum-verified locally:
-1,046 fighters, 7,322 files, 2,937,695,460 bytes. Publishing those files to the new
-public bucket is pending explicit approval after automatic review blocked the
-upload. No game ROM or private game workspace is part of that roster.
+The pinned public roster was published with explicit approval on 2026-09-15:
+1,046 fighters, 7,322 files, 2,937,695,460 bytes. Its public base is
+`https://storage.googleapis.com/nicknotfun-opensmash-public-assets`. All stored
+object sizes and checksums match the manifest-verified files. The roster includes
+portraits, metadata, audio, and Smash 64 custom fighter/UI bundles. It contains
+no ROM, private game workspace, or original rigged source models for the custom
+Melee roster.
 
 ## Operations
 
 Use [the deployment guide](README.md) for repeatable rollout commands. Current
 private configuration: `/home/nick/.config/opensmash-deploy/deployment.json`.
+
+Include the runtime explicitly on subsequent website deployments:
+
+```sh
+python3 deploy/gcp/site.py --project nicknotfun-opensmash --region us-central1 \
+  --config /home/nick/.config/opensmash-deploy/deployment.json \
+  --ssb64-runtime /home/nick/.cache/opensmash-deploy/ssb64-build/source/web-dist --apply
+```
 
 A relay restart ends its in-memory games. Coordinate relay updates between
 matches. The Melee converter uses one process and a persistent local workspace;

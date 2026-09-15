@@ -1711,7 +1711,7 @@ export default function App() {
         />
         <SettingsModal
           engineControls={isMelee?<Suspense fallback={<p>Loading bindings…</p>}><MeleeControls/></Suspense>:null}
-          engineSettings={isMelee?<Suspense fallback={<p>Loading Melee settings…</p>}><MeleeSettings/></Suspense>:null}
+          engineSettings={isMelee?<Suspense fallback={<p>Loading Melee settings…</p>}><MeleeSettings onPlayOriginals={()=>{setAdvancedOpen(false);launchMelee({type:'character'});}}/></Suspense>:null}
           accountConnected={Boolean(user)}
           authorized={authorized}
           debugMode={new URLSearchParams(window.location.search).get("debug") === "1"}

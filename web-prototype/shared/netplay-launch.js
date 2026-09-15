@@ -1,3 +1,4 @@
+import {originalCharacter} from '../../engines/melee/launcher/launch-plan.mjs';
 import {engineUrl, selectDirectBattleOpponents} from '../../engines/ssb64/launcher/launch-options.mjs';
 
 export function publicGameAction(action, catalog, meleeSettings) {
@@ -11,9 +12,15 @@ export function publicGameAction(action, catalog, meleeSettings) {
     return character;
   };
   for (const port of meleeSettings?.ports || []) {
-    if (!['selected', 'random'].includes(port.character) && !/^vanilla:\d+$/.test(port.character) && !bySlug.has(port.character)) {
+    const character = originalCharacter(port) || port.character;
+    if (!['selected', 'random', 'random:vanilla'].includes(character) && !/^vanilla:\d+$/.test(character) && !bySlug.has(character)) {
       throw Error('Choose public fighters or random opponents in Melee settings for an online game.');
     }
+  }
+  // Explicit originals replace every website pick, including private tiles.
+  // Do not publish unused character metadata or choose custom auto-opponents.
+  if (meleeSettings?.ports?.length === 4 && meleeSettings.ports.every(port => originalCharacter(port))) {
+    return {type: 'character', character: undefined, picks: [], opponents: []};
   }
   const character = publicPick(action.character);
   return {type: 'character', character, picks: (action.picks || []).map(publicPick),

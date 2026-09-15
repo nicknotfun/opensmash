@@ -3,7 +3,9 @@ import {mkdtemp, mkdir, readFile, rm, symlink, writeFile} from "node:fs/promises
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import {checkRuntime, runtimeFiles, siteConfiguration} from "./pilot-site.mjs";
+import {createHash} from "node:crypto";
+import {ZipWriter, Uint8ArrayWriter, Uint8ArrayReader} from "@zip.js/zip.js";
+import {checkRuntime, checkShaderArchive, runtimeFiles, siteConfiguration} from "./pilot-site.mjs";
 
 const config = {
   projectId: "nick-smash-pilot", region: "us-central1", siteOrigin: "https://smash.not.fun",
@@ -111,4 +113,55 @@ test("the standalone image copies the shared bridge and Melee browser runtime he
   assert.match(dockerfile, /test -s dist\/ssb64-netplay\.js/);
   assert.match(dockerfile, /FROM site AS pilot\s*$/);
   assert.doesNotMatch(dockerfile, /COPY (?:pipeline\/|BattleShip\/)/);
+});
+
+async function shaderZip(entries, comment) {
+  const writer = new ZipWriter(new Uint8ArrayWriter(), {useWebWorkers: false});
+  for (const [name, data, options = {}] of entries) await writer.add(name, new Uint8ArrayReader(Buffer.from(data)), options);
+  return writer.close(comment === undefined ? undefined : Buffer.from(comment));
+}
+
+test("shader archives accept only the pinned file names and bytes", async () => {
+  const name = "shaders/opengl/default.shader.glsl", data = "void main() {}";
+  const expected = {[name]: {size: Buffer.byteLength(data), sha256: createHash("sha256").update(data).digest("hex")}};
+  assert.deepEqual(await checkShaderArchive(await shaderZip([[name, data]]), expected), {files: 1});
+  const cases = [
+    [[name, "void fake() {}"]],
+    [[name, data], ["BattleShip.o2r", "game-data"]],
+    [["../" + name, data]],
+    [[name, data, {unixMode: 0o120777}]],
+    [],
+  ];
+  for (const entries of cases) await assert.rejects(checkShaderArchive(await shaderZip(entries), expected));
+});
+
+test("shader archives reject bytes outside the ZIP records", async () => {
+  const name = "shaders/opengl/default.shader.glsl", data = "void main() {}";
+  const expected = {[name]: {size: Buffer.byteLength(data), sha256: createHash("sha256").update(data).digest("hex")}};
+  const archive = Buffer.from(await shaderZip([[name, data]]));
+  const payload = Buffer.from("unclaimed payload");
+  // Keep the shader names, contents and checksums intact: otherwise an ordinary
+  // content mismatch could mask missing archive-boundary validation.
+  await assert.rejects(checkShaderArchive(Buffer.concat([payload, archive]), expected));
+  await assert.rejects(checkShaderArchive(Buffer.concat([archive, payload]), expected));
+});
+
+test("shader archives reject archive and member comments", async () => {
+  const name = "shaders/opengl/default.shader.glsl", data = "void main() {}";
+  const expected = {[name]: {size: Buffer.byteLength(data), sha256: createHash("sha256").update(data).digest("hex")}};
+  await assert.rejects(checkShaderArchive(await shaderZip([[name, data]], "unclaimed payload"), expected), /comment/);
+  await assert.rejects(checkShaderArchive(await shaderZip([[name, data, {comment: "unclaimed payload"}]]), expected), /Invalid shader archive entry/);
+});
+
+test("shader archives reject unrecognized extra fields", async () => {
+  const name = "shaders/opengl/default.shader.glsl", data = "void main() {}";
+  const expected = {[name]: {size: Buffer.byteLength(data), sha256: createHash("sha256").update(data).digest("hex")}};
+  const extraField = new Map([[0xcafe, Buffer.from("unclaimed payload")]]);
+  await assert.rejects(checkShaderArchive(await shaderZip([[name, data, {extraField}]]), expected), /Unexpected shader ZIP extra field/);
+});
+
+test("runtime preflight does not allow an arbitrary archive renamed to f3d.o2r", async context => {
+  const root = await fixture(context);
+  await writeFile(path.join(root, "files/f3d.o2r"), await shaderZip([["shaders/opengl/default.shader.glsl", "wrong bytes"]]));
+  await assert.rejects(checkRuntime(root), /Unexpected shader file or size|Shader checksum mismatch/);
 });

@@ -14,10 +14,14 @@ private Melee conversion service. Use a new, billing-enabled GCP project.
 | Sign-in and bot checks | Firebase Authentication and Turnstile | Own project and domain |
 
 The deployment tools provision infrastructure; they do not provide game ROMs.
-Smash 64 needs a matching patched browser runtime and a player-provided ROM.
-Melee needs a verified private game workspace plus its matching patched browser
-runtime. The Melee endpoint returns 503 until that workspace is ready. Real
-multiplayer gameplay must be validated after those inputs are installed.
+The deployment operator builds and hosts the browser runtimes. Smash 64 can be
+built without a ROM; each player selects their own ROM for local browser
+extraction. Melee currently compiles its game executable from an ISO during the
+one-time engine build. Its private conversion workspace is also generated from
+that ISO and is needed for custom fighter preparation. The operator handles
+these generated artifacts; players do not assemble workspaces or compile code.
+The Melee service returns 503 until provisioned. Real multiplayer gameplay must
+be validated with the matching game files.
 
 See [the deployed resource inventory](LIVE.md) for the current project and prerequisites.
 
